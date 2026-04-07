@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import os
 from datetime import date, timedelta
@@ -31,6 +32,26 @@ app = typer.Typer(
 
 console = Console(stderr=True)
 out_rich = Console()  # stdout for Rich-rendered output (config show table)
+
+
+def version_callback(value: bool) -> None:
+    if value:
+        v = importlib.metadata.version("gitvisual")
+        typer.echo(v)
+        raise typer.Exit()
+
+
+@app.callback()
+def main_callback(
+    version: bool = typer.Option(
+        None,
+        "--version",
+        callback=version_callback,
+        is_eager=True,
+        help="Show version and exit.",
+    ),
+) -> None:
+    pass
 
 
 # stdout: machine-readable (plain print, no Rich wrapping/markup)
@@ -226,6 +247,7 @@ def generate(
         max_tokens=max_tokens if max_tokens is not None else config.llm.max_tokens,
         max_tokens_grouping=config.llm.max_tokens_grouping,
         timeout=config.llm.timeout,
+        timeout_grouping=config.llm.timeout_grouping,
         stub=stub_llm,
     )
 
@@ -261,13 +283,12 @@ def generate(
                     continue
 
                 if summarize or stub_llm:
-                    summary = summarizer.summarize(day)
+                    summary, groups = summarizer.summarize_and_group(
+                        day, max_groups=config.render.max_groups_shown
+                    )
                     if summary:
                         day = day.model_copy(update={"summary": summary})
                         total_summaries += 1
-                    groups = summarizer.group_commits(
-                        day, max_groups=config.render.max_groups_shown
-                    )
                     if groups is not None:
                         day = day.model_copy(update={"commit_groups": groups})
 

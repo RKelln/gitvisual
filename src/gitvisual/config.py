@@ -35,6 +35,7 @@ class LLMConfig(BaseModel):
     max_tokens: int = 1500
     max_tokens_grouping: int = 4096
     timeout: int = 30
+    timeout_grouping: int = 120
 
 
 class RenderConfig(BaseModel):
@@ -144,6 +145,7 @@ api_key_env = "OPENROUTER_API_KEY"               # name of the env var holding y
 max_tokens = 1500  # thinking models consume tokens on reasoning before output; needs room
 max_tokens_grouping = 4096  # grouping returns structured JSON — needs more room than narrative summary
 timeout = 30
+timeout_grouping = 120  # grouping turn can be slow; give it more time
 
 [render]
 card_width = 1200

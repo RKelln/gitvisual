@@ -822,3 +822,326 @@ class TestLLMSummarizerGroupCommits:
             1 for group in result for commit in group.commits if commit.short_hash == c1.short_hash
         )
         assert c1_count == 1, f"[{scenario}] c1 appeared {c1_count} times, expected 1"
+
+
+# ---------------------------------------------------------------------------
+# LLMSummarizer.summarize_and_group (two-turn session)
+# ---------------------------------------------------------------------------
+
+
+def _make_fake_litellm_seq(responses: list[str]) -> types.ModuleType:
+    """Fake litellm that returns successive responses from a list (one per call)."""
+    from types import SimpleNamespace
+
+    fake = types.ModuleType("litellm")
+    fake.suppress_debug_info = False  # type: ignore[attr-defined]
+    fake.verbose = True  # type: ignore[attr-defined]
+    call_count = [0]
+
+    def completion(**kwargs: object) -> object:
+        idx = call_count[0]
+        call_count[0] += 1
+        content = responses[idx]
+        msg = SimpleNamespace(content=content)
+        choice = SimpleNamespace(message=msg)
+        return SimpleNamespace(choices=[choice])
+
+    fake.completion = completion  # type: ignore[attr-defined]
+    return fake
+
+
+class TestLLMSummarizerSummarizeAndGroup:
+    def _make_day(self, tmp_path: Path) -> tuple[DaySummary, list]:
+        c1 = make_commit(
+            hash="aabbccdd11223344",
+            message="feat: add login",
+            insertions=100,
+            deletions=10,
+            files_changed=3,
+        )
+        c2 = make_commit(
+            hash="eeff001122334455",
+            message="fix: auth bug",
+            insertions=20,
+            deletions=5,
+            files_changed=1,
+        )
+        day = make_day_summary(commits=[c1, c2], tmp_path=tmp_path)
+        return day, [c1, c2]
+
+    def test_happy_path_returns_summary_and_groups(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two sequential LLM calls return (summary, groups) tuple."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, (c1, c2) = self._make_day(tmp_path)
+
+        groups_json = json.dumps(
+            {"groups": [{"summary": "Auth work", "commit_hashes": [c1.short_hash, c2.short_hash]}]}
+        )
+        summary_text = "Built authentication feature with login and bug fix."
+
+        monkeypatch.setitem(
+            sys.modules, "litellm", _make_fake_litellm_seq([groups_json, summary_text])
+        )
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        result = s.summarize_and_group(day)
+
+        assert result is not None
+        summary, groups = result
+        assert summary == summary_text
+        assert groups is not None
+        assert len(groups) == 1
+        assert groups[0].summary == "Auth work"
+
+    def test_turn1_uses_timeout_grouping_turn2_uses_timeout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Turn 1 uses timeout_grouping; Turn 2 uses timeout."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, (c1, _c2) = self._make_day(tmp_path)
+
+        groups_json = json.dumps(
+            {"groups": [{"summary": "Work", "commit_hashes": [c1.short_hash]}]}
+        )
+        summary_text = "Did some work."
+
+        fake = types.ModuleType("litellm")
+        fake.suppress_debug_info = False  # type: ignore[attr-defined]
+        fake.verbose = True  # type: ignore[attr-defined]
+        captured_timeouts: list[int] = []
+        responses = [groups_json, summary_text]
+        call_count = [0]
+
+        def capturing_completion(**kwargs: object) -> object:
+            from types import SimpleNamespace
+
+            captured_timeouts.append(int(kwargs.get("timeout", -1)))  # type: ignore[arg-type]
+            idx = call_count[0]
+            call_count[0] += 1
+            msg = SimpleNamespace(content=responses[idx])
+            return SimpleNamespace(choices=[SimpleNamespace(message=msg)])
+
+        fake.completion = capturing_completion  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY", timeout=30, timeout_grouping=120)
+        s.summarize_and_group(day)
+
+        assert len(captured_timeouts) == 2
+        assert captured_timeouts[0] == 120  # Turn 1: grouping timeout
+        assert captured_timeouts[1] == 30  # Turn 2: summary timeout
+
+    def test_turn1_failure_returns_none_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If Turn 1 returns None, result is (None, None)."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, _ = self._make_day(tmp_path)
+
+        fake = types.ModuleType("litellm")
+        fake.suppress_debug_info = False  # type: ignore[attr-defined]
+        fake.verbose = True  # type: ignore[attr-defined]
+
+        def raise_exc(**kwargs: object) -> None:
+            raise RuntimeError("Turn 1 failed")
+
+        fake.completion = raise_exc  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        result = s.summarize_and_group(day)
+        assert result == (None, None)
+
+    def test_turn2_failure_returns_none_with_groups(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If Turn 2 fails, groups from Turn 1 still returned; summary is None."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, (c1, _c2) = self._make_day(tmp_path)
+
+        groups_json = json.dumps(
+            {"groups": [{"summary": "Auth work", "commit_hashes": [c1.short_hash]}]}
+        )
+
+        fake = types.ModuleType("litellm")
+        fake.suppress_debug_info = False  # type: ignore[attr-defined]
+        fake.verbose = True  # type: ignore[attr-defined]
+        call_count = [0]
+
+        def turn2_fails(**kwargs: object) -> object:
+            from types import SimpleNamespace
+
+            idx = call_count[0]
+            call_count[0] += 1
+            if idx == 0:
+                msg = SimpleNamespace(content=groups_json)
+                return SimpleNamespace(choices=[SimpleNamespace(message=msg)])
+            raise RuntimeError("Turn 2 failed")
+
+        fake.completion = turn2_fails  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        summary, groups = s.summarize_and_group(day)
+
+        assert summary is None
+        assert groups is not None
+        assert len(groups) >= 1
+        assert groups[0].summary == "Auth work"
+
+    def test_invalid_json_turn1_returns_none_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Invalid JSON from Turn 1 → (None, None). Error logged to stderr."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, _ = self._make_day(tmp_path)
+
+        monkeypatch.setitem(
+            sys.modules, "litellm", _make_fake_litellm_seq(["not-valid-json", "ignored"])
+        )
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        result = s.summarize_and_group(day)
+        assert result == (None, None)
+
+    def test_max_groups_flows_to_grouping_instruction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """max_groups parameter value appears in Turn 1 messages."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, (c1, _) = self._make_day(tmp_path)
+
+        fake = types.ModuleType("litellm")
+        fake.suppress_debug_info = False  # type: ignore[attr-defined]
+        fake.verbose = True  # type: ignore[attr-defined]
+        captured_messages: list[list] = []
+        responses = [
+            json.dumps({"groups": [{"summary": "g", "commit_hashes": [c1.short_hash]}]}),
+            "summary",
+        ]
+        call_count = [0]
+
+        def capturing(**kwargs: object) -> object:
+            from types import SimpleNamespace
+
+            captured_messages.append(list(kwargs.get("messages", [])))  # type: ignore[arg-type]
+            idx = call_count[0]
+            call_count[0] += 1
+            msg = SimpleNamespace(content=responses[idx])
+            return SimpleNamespace(choices=[SimpleNamespace(message=msg)])
+
+        fake.completion = capturing  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        s.summarize_and_group(day, max_groups=7)
+
+        # Turn 1 messages must mention the group count hint
+        turn1_msgs = captured_messages[0]
+        all_text = " ".join(str(m.get("content", "")) for m in turn1_msgs)
+        assert "7" in all_text
+
+    def test_max_groups_none_no_hint_in_prompt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """max_groups=None → no group count hint in Turn 1 messages."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, (c1, _) = self._make_day(tmp_path)
+
+        fake = types.ModuleType("litellm")
+        fake.suppress_debug_info = False  # type: ignore[attr-defined]
+        fake.verbose = True  # type: ignore[attr-defined]
+        captured_messages: list[list] = []
+        responses = [
+            json.dumps({"groups": [{"summary": "g", "commit_hashes": [c1.short_hash]}]}),
+            "summary",
+        ]
+        call_count = [0]
+
+        def capturing(**kwargs: object) -> object:
+            from types import SimpleNamespace
+
+            captured_messages.append(list(kwargs.get("messages", [])))  # type: ignore[arg-type]
+            idx = call_count[0]
+            call_count[0] += 1
+            msg = SimpleNamespace(content=responses[idx])
+            return SimpleNamespace(choices=[SimpleNamespace(message=msg)])
+
+        fake.completion = capturing  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        s.summarize_and_group(day, max_groups=None)
+
+        turn1_msgs = captured_messages[0]
+        all_text = " ".join(str(m.get("content", "")) for m in turn1_msgs)
+        # When max_groups=None, the specific count hint "Try to use at most N groups" is absent
+        import re
+
+        assert not re.search(r"Try to use at most \d+ group", all_text)
+
+    def test_empty_day_returns_none_none(self, tmp_path: Path) -> None:
+        """Empty day → (None, None) without any LLM call."""
+        from datetime import date
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        empty_day = DaySummary(
+            date=date(2025, 4, 7), repo_path=tmp_path, repo_name="repo", commits=[]
+        )
+        assert s.summarize_and_group(empty_day) == (None, None)
+
+
+class TestStubSummarizerSummarizeAndGroup:
+    def test_returns_summary_and_groups_for_active_day(self, tmp_path: Path) -> None:
+        s = StubSummarizer()
+        c1 = make_commit()
+        c2 = make_commit(hash="b" * 16)
+        day = make_day_summary(commits=[c1, c2], tmp_path=tmp_path)
+        summary, groups = s.summarize_and_group(day)
+        assert summary is not None
+        assert isinstance(summary, str)
+        assert groups is not None
+        assert len(groups) == 1
+        assert groups[0].summary == "Stub: all commits grouped"
+        assert sorted(groups[0].commits, key=lambda c: c.hash) == sorted(
+            [c1, c2], key=lambda c: c.hash
+        )
+
+    def test_returns_empty_groups_for_empty_day(self, tmp_path: Path) -> None:
+        from datetime import date
+
+        s = StubSummarizer()
+        day = DaySummary(date=date(2025, 4, 7), repo_path=tmp_path, repo_name="repo", commits=[])
+        summary, groups = s.summarize_and_group(day)
+        # Empty day: summarize() returns None; groups is a list (possibly empty)
+        assert summary is None
+        assert groups is not None
+        assert isinstance(groups, list)
+
+    def test_max_groups_ignored(self, tmp_path: Path) -> None:
+        s = StubSummarizer()
+        day = make_day_summary(tmp_path=tmp_path)
+        summary, groups = s.summarize_and_group(day, max_groups=1)
+        assert summary is not None
+        assert groups is not None
+
+
+class TestNullSummarizerSummarizeAndGroup:
+    def test_always_returns_none_none(self, tmp_path: Path) -> None:
+        s = NullSummarizer()
+        day = make_day_summary(tmp_path=tmp_path)
+        assert s.summarize_and_group(day) == (None, None)
+
+    def test_empty_day_returns_none_none(self, tmp_path: Path) -> None:
+        from datetime import date
+
+        s = NullSummarizer()
+        day = DaySummary(date=date(2025, 4, 7), repo_path=tmp_path, repo_name="repo", commits=[])
+        assert s.summarize_and_group(day) == (None, None)
+
+    def test_max_groups_ignored(self, tmp_path: Path) -> None:
+        s = NullSummarizer()
+        day = make_day_summary(tmp_path=tmp_path)
+        assert s.summarize_and_group(day, max_groups=5) == (None, None)
