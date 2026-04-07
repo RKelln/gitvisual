@@ -281,8 +281,15 @@ class TestDiscover:
         assert result.exit_code == 0
         assert "no git repositories" in result.stdout.lower() or "found 0" in result.stdout.lower()
 
-    def test_discover_generate_flag(self, tmp_path: Path) -> None:
-        """Discover with --generate creates cards for active repos."""
+    def test_discover_does_not_accept_generate_flag(self, tmp_path: Path) -> None:
+        """discover --generate is no longer valid; use generate --discover instead."""
+        result = runner.invoke(app, ["discover", str(tmp_path), "--generate"])
+        assert result.exit_code != 0
+
+
+class TestGenerateDiscover:
+    def test_generate_discover_creates_cards_for_active_repos(self, tmp_path: Path) -> None:
+        """generate --discover finds repos with activity and generates cards."""
         repo = tmp_path / "active-repo"
         init_git_repo(repo)
         make_commit_in_repo(
@@ -292,23 +299,46 @@ class TestDiscover:
             author_date=f"{date.today().isoformat()}T12:00:00+00:00",
         )
 
+        # Repo with no commits today — should be skipped
+        quiet = tmp_path / "quiet-repo"
+        init_git_repo(quiet)
+
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
         result = runner.invoke(
             app,
             [
-                "discover",
+                "generate",
+                "--discover",
                 str(tmp_path),
-                "--generate",
                 "--output",
                 str(output_dir),
+                "--no-summary",
             ],
         )
 
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         cards = list(output_dir.glob("*.png"))
-        assert len(cards) >= 1
+        assert len(cards) == 1
+
+    def test_generate_repos_and_discover_are_mutually_exclusive(self, tmp_path: Path) -> None:
+        """Providing both explicit repos and --discover is an error."""
+        repo = tmp_path / "repo"
+        init_git_repo(repo)
+
+        result = runner.invoke(
+            app,
+            ["generate", str(repo), "--discover", str(tmp_path), "--no-summary"],
+        )
+
+        assert result.exit_code != 0
+        assert "mutually exclusive" in result.output.lower() or "cannot" in result.output.lower()
+
+    def test_generate_requires_repos_or_discover(self, tmp_path: Path) -> None:
+        """generate with no repos and no --discover is an error."""
+        result = runner.invoke(app, ["generate", "--no-summary"])
+        assert result.exit_code != 0
 
 
 class TestConfigInit:

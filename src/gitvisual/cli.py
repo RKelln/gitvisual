@@ -71,9 +71,9 @@ def _output_path(
 @app.command()
 def generate(
     repos: Annotated[
-        list[Path],
+        list[Path] | None,
         typer.Argument(help="Repository path(s) to generate cards for."),
-    ],
+    ] = None,
     date_str: Annotated[
         str | None,
         typer.Option("--date", "-d", help="Target date (YYYY-MM-DD). Defaults to today."),
@@ -94,6 +94,13 @@ def generate(
         bool,
         typer.Option("--last-week", help="Generate cards for the last 7 days."),
     ] = False,
+    discover_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--discover",
+            help="Discover repos under this path instead of specifying them explicitly.",
+        ),
+    ] = None,
     output: Annotated[
         Path | None,
         typer.Option("--output", "-o", help="Output directory (default: current dir)."),
@@ -126,6 +133,19 @@ def generate(
     ] = None,
 ) -> None:
     """Generate visual cards from git commit history."""
+    # Validate: repos and --discover are mutually exclusive; one must be provided
+    if repos and discover_path:
+        console.print(
+            "[red]Error:[/red] Cannot specify repos and --discover together — they are mutually exclusive."
+        )
+        raise typer.Exit(1)
+    if not repos and not discover_path:
+        console.print("[red]Error:[/red] Specify at least one repo path, or use --discover PATH.")
+        raise typer.Exit(1)
+    if not repos and not discover_path:
+        console.print("[red]Error:[/red] Specify at least one repo path, or use --discover PATH.")
+        raise typer.Exit(1)
+
     config = load_config(config_path)
 
     # Resolve date range
@@ -146,6 +166,18 @@ def generate(
     # Resolve output dir
     out_dir = output or Path(config.defaults.output_dir)
     out_dir = out_dir.expanduser().resolve()
+
+    # Resolve repo list — either explicit or discovered
+    resolved_repos: list[Path]
+    if discover_path:
+        search = discover_path.expanduser().resolve()
+        console.print(f"Discovering repos under [bold]{search}[/bold]…")
+        resolved_repos = discover_repos(search, exclude=config.repos.exclude)
+        if not resolved_repos:
+            console.print(f"[yellow]No git repositories found under {search}[/yellow]")
+            raise typer.Exit(0)
+    else:
+        resolved_repos = list(repos or [])
 
     # Build renderer (allow style override)
 
@@ -199,7 +231,7 @@ def generate(
     from datetime import timedelta as td
 
     while current <= d_to:
-        for repo_path in repos:
+        for repo_path in resolved_repos:
             repo_path = repo_path.expanduser().resolve()
             if not is_git_repo(repo_path):
                 console.print(f"[yellow]Skipping {repo_path}: not a git repo[/yellow]")
@@ -262,26 +294,6 @@ def discover(
         bool,
         typer.Option("--yesterday", help="Use yesterday's date."),
     ] = False,
-    generate_cards: Annotated[
-        bool,
-        typer.Option("--generate", "-g", help="Also generate cards for repos with activity."),
-    ] = False,
-    output: Annotated[
-        Path | None,
-        typer.Option("--output", "-o", help="Output directory for generated cards."),
-    ] = None,
-    summarize: Annotated[
-        bool,
-        typer.Option("--summarize/--no-summary", help="Enable LLM summary generation."),
-    ] = False,
-    model: Annotated[
-        str | None,
-        typer.Option("--model", "-m", help="LLM model override."),
-    ] = None,
-    max_tokens: Annotated[
-        int | None,
-        typer.Option("--max-tokens", help="Override max_tokens for LLM calls."),
-    ] = None,
     config_path: Annotated[
         Path | None,
         typer.Option("--config", help="Path to config.toml"),
@@ -325,23 +337,9 @@ def discover(
         raise typer.Exit(0)
 
     console.print(f"\n[bold]{len(active_repos)}[/bold] active repos on {target}.")
-
-    if generate_cards:
-        generate(
-            repos=active_repos,
-            date_str=target.isoformat(),
-            yesterday=False,
-            date_from=None,
-            date_to=None,
-            last_week=False,
-            output=output,
-            summarize=summarize,
-            style=None,
-            config_path=config_path,
-            stub_llm=False,
-            model=model,
-            max_tokens=max_tokens,
-        )
+    console.print(
+        f"\n[dim]Tip: run [bold]gitvisual generate --discover {search_path}[/bold] to generate cards.[/dim]"
+    )
 
 
 # ---------------------------------------------------------------------------
