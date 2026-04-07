@@ -239,7 +239,8 @@ def generate(
             try:
                 day = collect_day(repo_path, current)
                 if day.is_empty:
-                    console.print(f"[dim]{current}  {day.repo_name}: no commits[/dim]")
+                    if not discover_path:
+                        console.print(f"[dim]{current}  {day.repo_name}: no commits[/dim]")
                     continue
 
                 if summarize or stub_llm:
