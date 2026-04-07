@@ -121,3 +121,31 @@ class TestRenderConfigMaxGroupsShown:
         toml.write_text("[render]\nmax_groups_shown = 5\n")
         config = load_config(toml)
         assert config.render.max_groups_shown == 5
+
+
+class TestLLMConfigTimeoutGrouping:
+    def test_default_timeout_grouping(self) -> None:
+        from gitvisual.config import LLMConfig
+
+        cfg = LLMConfig()
+        assert cfg.timeout_grouping == 120
+
+    def test_timeout_grouping_toml_override(self, tmp_path: Path) -> None:
+        toml = tmp_path / "config.toml"
+        toml.write_text("[llm]\ntimeout_grouping = 60\n")
+        config = load_config(toml)
+        assert config.llm.timeout_grouping == 60
+
+    def test_timeout_grouping_independent_of_timeout(self, tmp_path: Path) -> None:
+        """timeout_grouping can be overridden independently of timeout."""
+        toml = tmp_path / "config.toml"
+        toml.write_text("[llm]\ntimeout = 10\ntimeout_grouping = 300\n")
+        config = load_config(toml)
+        assert config.llm.timeout == 10
+        assert config.llm.timeout_grouping == 300
+
+    def test_example_config_contains_timeout_grouping(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        write_example_config(path)
+        content = path.read_text()
+        assert "timeout_grouping" in content

@@ -493,15 +493,25 @@ class TestGenerateLLMSummary:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """When LLM returns a summary, card is generated and no warning is shown."""
+        import json
+
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
         repo = self._make_repo_with_commit(tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
-        mock_response = MagicMock()
-        mock_response.choices[0].message.content = "Built a new feature for the project."
+        # With summarize_and_group(): Turn 1 needs valid JSON groups, Turn 2 returns summary text
+        groups_response = MagicMock()
+        groups_response.choices[0].message.content = json.dumps(
+            {"groups": [{"summary": "Feature work", "commit_hashes": []}]}
+        )
+        summary_response = MagicMock()
+        summary_response.choices[0].message.content = "Built a new feature for the project."
 
-        with patch("dotenv.load_dotenv"), patch("litellm.completion", return_value=mock_response):
+        with (
+            patch("dotenv.load_dotenv"),
+            patch("litellm.completion", side_effect=[groups_response, summary_response]),
+        ):
             result = runner.invoke(
                 app,
                 ["generate", str(repo), "--output", str(output_dir), "--summarize"],
@@ -517,18 +527,27 @@ class TestGenerateLLMSummary:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """--model flag overrides the model from config."""
+        import json
+
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
         repo = self._make_repo_with_commit(tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
-        mock_response = MagicMock()
-        mock_response.choices[0].message.content = "Did some work."
         captured: dict[str, object] = {}
+        call_count = [0]
+        # Turn 1: JSON groups; Turn 2: summary text
+        responses = [
+            json.dumps({"groups": [{"summary": "g", "commit_hashes": []}]}),
+            "Did some work.",
+        ]
 
         def capture_completion(**kwargs: object) -> MagicMock:
             captured.update(kwargs)
-            return mock_response
+            mock = MagicMock()
+            mock.choices[0].message.content = responses[call_count[0] % len(responses)]
+            call_count[0] += 1
+            return mock
 
         with (
             patch("dotenv.load_dotenv"),
@@ -554,19 +573,27 @@ class TestGenerateLLMSummary:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """--max-tokens flag overrides max_tokens for the summarize LLM call."""
+        import json
+
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
         repo = self._make_repo_with_commit(tmp_path)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
-        mock_response = MagicMock()
-        mock_response.choices[0].message.content = "Did some work."
-        # Capture all calls (summarize + group_commits both call litellm)
+        # Capture all calls (Turn 1 = grouping, Turn 2 = summary)
         all_calls: list[dict[str, object]] = []
+        call_count = [0]
+        responses = [
+            json.dumps({"groups": [{"summary": "g", "commit_hashes": []}]}),
+            "Did some work.",
+        ]
 
         def capture_completion(**kwargs: object) -> MagicMock:
             all_calls.append(dict(kwargs))
-            return mock_response
+            mock = MagicMock()
+            mock.choices[0].message.content = responses[call_count[0] % len(responses)]
+            call_count[0] += 1
+            return mock
 
         with (
             patch("dotenv.load_dotenv"),
@@ -586,9 +613,10 @@ class TestGenerateLLMSummary:
             )
 
         assert result.exit_code == 0
-        # The first LLM call is summarize — must use the overridden max_tokens=42
-        assert len(all_calls) >= 1
-        assert all_calls[0].get("max_tokens") == 42
+        # With summarize_and_group(): Turn 1 = grouping (uses max_tokens_grouping),
+        # Turn 2 = summary (uses max_tokens overridden to 42).
+        assert len(all_calls) >= 2
+        assert all_calls[1].get("max_tokens") == 42
 
 
 class TestGenerateGroupCommits:
@@ -662,8 +690,64 @@ class TestGenerateGroupCommits:
         day = rendered_days[0]
         assert day.commit_groups is None
 
-    def test_stub_llm_group_commits_receives_max_groups_from_config(self, tmp_path: Path) -> None:
-        """group_commits() must be called with max_groups=config.render.max_groups_shown."""
+
+class TestVersionFlag:
+    def test_version_flag_exits_zero(self) -> None:
+        result = runner.invoke(app, ["--version"])
+        assert result.exit_code == 0
+
+    def test_version_flag_outputs_version_string(self) -> None:
+        result = runner.invoke(app, ["--version"])
+        output = result.output.strip()
+        assert len(output) > 0, "Expected a non-empty version string"
+        # Version should look like a semver or PEP 440 string (e.g. "0.1.0")
+        assert any(c.isdigit() for c in output), (
+            f"Expected digits in version string, got: {output!r}"
+        )
+
+
+class TestGenerateSummarizeAndGroup:
+    """Tests for the new summarize_and_group() wiring in generate command."""
+
+    def _make_repo_with_commit(self, tmp_path: Path) -> Path:
+        repo = tmp_path / "testrepo"
+        init_git_repo(repo)
+        make_commit_in_repo(
+            repo,
+            files={"main.py": "x = 1"},
+            message="feat: add feature",
+            author_date=f"{date.today().isoformat()}T12:00:00+00:00",
+        )
+        return repo
+
+    def test_stub_llm_uses_summarize_and_group(self, tmp_path: Path) -> None:
+        """--stub-llm triggers summarize_and_group(), not separate summarize+group_commits."""
+        from gitvisual.llm.summarizer import StubSummarizer
+
+        repo = self._make_repo_with_commit(tmp_path)
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        summarize_and_group_calls: list = []
+        original = StubSummarizer.summarize_and_group
+
+        def capturing(self_inner: StubSummarizer, day: object, max_groups: object = None) -> object:
+            summarize_and_group_calls.append({"max_groups": max_groups})
+            return original(self_inner, day, max_groups=max_groups)  # type: ignore[arg-type]
+
+        with patch.object(StubSummarizer, "summarize_and_group", capturing):
+            result = runner.invoke(
+                app,
+                ["generate", str(repo), "--output", str(output_dir), "--summarize", "--stub-llm"],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert len(summarize_and_group_calls) >= 1
+
+    def test_llm_summarize_and_group_called_with_max_groups(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """summarize_and_group() receives max_groups=config.render.max_groups_shown."""
         from gitvisual.config import Config
         from gitvisual.llm.summarizer import StubSummarizer
 
@@ -671,24 +755,48 @@ class TestGenerateGroupCommits:
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
-        # Capture group_commits calls to verify max_groups argument
-        group_commits_calls: list[dict] = []
-        original_group_commits = StubSummarizer.group_commits
+        calls: list[dict] = []
+        original = StubSummarizer.summarize_and_group
 
-        def capturing_group_commits(
-            self_inner: StubSummarizer, day: object, max_groups: object = None
-        ) -> object:
-            group_commits_calls.append({"max_groups": max_groups})
-            return original_group_commits(self_inner, day, max_groups=max_groups)  # type: ignore[arg-type]
+        def capturing(self_inner: StubSummarizer, day: object, max_groups: object = None) -> object:
+            calls.append({"max_groups": max_groups})
+            return original(self_inner, day, max_groups=max_groups)  # type: ignore[arg-type]
 
-        with patch.object(StubSummarizer, "group_commits", capturing_group_commits):
+        with patch.object(StubSummarizer, "summarize_and_group", capturing):
             result = runner.invoke(
                 app,
                 ["generate", str(repo), "--output", str(output_dir), "--summarize", "--stub-llm"],
             )
 
         assert result.exit_code == 0, result.output
-        assert len(group_commits_calls) >= 1
-        # The value passed must match config.render.max_groups_shown (default: 10)
+        assert len(calls) >= 1
         expected = Config().render.max_groups_shown
-        assert group_commits_calls[0]["max_groups"] == expected
+        assert calls[0]["max_groups"] == expected
+
+    def test_summarize_and_group_sets_both_summary_and_groups(self, tmp_path: Path) -> None:
+        """summarize_and_group() result populates both summary and commit_groups on day."""
+        from gitvisual.render.card import CardRenderer
+
+        repo = self._make_repo_with_commit(tmp_path)
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        rendered_days: list = []
+        original_render = CardRenderer.render_to_file
+
+        def capturing_render(self_inner: CardRenderer, day: object, output_path: object) -> object:
+            rendered_days.append(day)
+            return original_render(self_inner, day, output_path)  # type: ignore[arg-type]
+
+        with patch.object(CardRenderer, "render_to_file", capturing_render):
+            result = runner.invoke(
+                app,
+                ["generate", str(repo), "--output", str(output_dir), "--summarize", "--stub-llm"],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert len(rendered_days) == 1
+        day = rendered_days[0]
+        assert day.summary is not None
+        assert day.commit_groups is not None
+        assert len(day.commit_groups) >= 1
