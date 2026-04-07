@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 from rich.console import Console
@@ -29,7 +30,17 @@ app = typer.Typer(
 )
 
 console = Console(stderr=True)
-out = Console()  # stdout for machine-readable output
+out_rich = Console()  # stdout for Rich-rendered output (config show table)
+
+
+# stdout: machine-readable (plain print, no Rich wrapping/markup)
+def _out(s: str) -> None:
+    print(s)  # noqa: T201
+
+
+def _out_json(data: Any) -> None:
+    """Emit JSON to stdout."""
+    print(json.dumps(data, indent=2))  # noqa: T201
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +142,10 @@ def generate(
         int | None,
         typer.Option("--max-tokens", help="Override max_tokens for LLM calls."),
     ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Output results as JSON to stdout (for scripts/agents)."),
+    ] = False,
 ) -> None:
     """Generate visual cards from git commit history."""
     # Validate: repos and --discover are mutually exclusive; one must be provided
@@ -228,6 +243,7 @@ def generate(
     current = d_from
     total_cards = 0
     total_summaries = 0
+    results: list[dict[str, Any]] = []
     from datetime import timedelta as td
 
     while current <= d_to:
@@ -256,13 +272,27 @@ def generate(
                     f"[green]✓[/green]  {current}  {day.repo_name}: "
                     f"{len(day.commits)} commit(s) → {card_path}{summary_preview}"
                 )
-                out.print(str(card_path))
                 total_cards += 1
+                results.append(
+                    {
+                        "date": current.isoformat(),
+                        "repo": day.repo_name,
+                        "repo_path": str(repo_path),
+                        "commits": len(day.commits),
+                        "card_path": str(card_path),
+                        "summary": day.summary,
+                    }
+                )
+                if not json_output:
+                    _out(str(card_path))
 
             except GitCollectorError as e:
                 console.print(f"[red]Error collecting {repo_path}: {e}[/red]")
 
         current += td(days=1)
+
+    if json_output:
+        _out_json(results)
 
     if total_cards == 0:
         console.print("[dim]No cards generated.[/dim]")
@@ -299,6 +329,10 @@ def discover(
         Path | None,
         typer.Option("--config", help="Path to config.toml"),
     ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Output results as JSON to stdout (for scripts/agents)."),
+    ] = False,
 ) -> None:
     """Find git repositories with commit activity on a given date."""
     config = load_config(config_path)
@@ -322,22 +356,33 @@ def discover(
         f"Found [bold]{len(repos)}[/bold] repositories. Checking for activity on {target}…\n"
     )
 
-    active_repos: list[Path] = []
+    results: list[dict[str, Any]] = []
     for repo_path in repos:
         try:
             day = collect_day(repo_path, target)
             if not day.is_empty:
-                active_repos.append(repo_path)
                 console.print(f"[green]✓[/green]  {day.repo_name}: {len(day.commits)} commit(s)")
-                out.print(str(repo_path))
+                results.append(
+                    {
+                        "date": target.isoformat(),
+                        "repo": day.repo_name,
+                        "repo_path": str(repo_path),
+                        "commits": len(day.commits),
+                    }
+                )
+                if not json_output:
+                    _out(str(repo_path))
         except GitCollectorError:
             pass
 
-    if not active_repos:
+    if not results:
         console.print(f"\n[dim]No activity found on {target}.[/dim]")
         raise typer.Exit(0)
 
-    console.print(f"\n[bold]{len(active_repos)}[/bold] active repos on {target}.")
+    if json_output:
+        _out_json(results)
+
+    console.print(f"\n[bold]{len(results)}[/bold] active repos on {target}.")
     console.print(
         f"\n[dim]Tip: run [bold]gitvisual generate --discover {search_path}[/bold] to generate cards.[/dim]"
     )
@@ -400,7 +445,7 @@ def config_show(
         for key, value in obj.model_dump().items():
             table.add_row(section, key, str(value))
 
-    out.print(table)
+    out_rich.print(table)
 
 
 # ---------------------------------------------------------------------------
