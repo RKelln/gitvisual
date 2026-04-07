@@ -80,6 +80,10 @@ scripts/agent-run.sh make ci
 - **Immutability:** pydantic models are `model_config = ConfigDict(frozen=True)`
 - **Tests:** fixture git repos live in `tests/fixtures/`; use `tmp_path` for output
 
+## Gotchas
+
+- **Frozen pydantic models with `list` fields** (e.g. `Commit`, `CommitGroup`) are **not hashable** and cannot be used in sets or as dict keys. Use sort-and-compare for equality assertions in tests, not set operations.
+
 ## Commit Messages
 
 Conventional Commits with `Generated-by` trailer:
