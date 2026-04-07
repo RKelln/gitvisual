@@ -160,8 +160,9 @@ model = "anthropic/claude-3-haiku"
 api_key_env = "OPENROUTER_API_KEY"   # name of env var to read
 api_base = ""                         # optional custom base URL
 max_tokens = 200
-max_tokens_grouping = 4096            # separate budget for group_commits() call
+max_tokens_grouping = 4096            # token budget for grouping turn (turn 1)
 timeout = 30
+timeout_grouping = 120                # timeout for grouping turn (turn 1); summary turn uses timeout
 
 [render]
 card_width = 1200
@@ -227,6 +228,10 @@ Goal: a CLI that takes a repo path + date and produces a clean, dark-themed PNG 
 8. LLM commit grouping: CommitGroup model, group_commits() on all summarizer types,
    card renderer groups path (_draw_commit_group), max_groups_shown config,
    max_tokens_grouping config, --json includes commit_groups for debugging
+9. LLM two-turn session: summarize_and_group() sends commits once (turn 1: grouping,
+   turn 2: summary from history); timeout_grouping config; shared helpers
+   (_format_commit_context, _grouping_question, _summarize_question, _parse_groups);
+   stderr error logging; --version flag
 
 **Remaining Phase 1 work:**
 - Download and bundle Inter + JetBrains Mono `.ttf` files into `assets/fonts/`
