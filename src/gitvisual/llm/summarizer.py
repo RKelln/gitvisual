@@ -26,7 +26,7 @@ class LLMSummarizer:
         model: str = "anthropic/claude-3-haiku",
         api_key_env: str = "OPENROUTER_API_KEY",
         api_base: str | None = None,
-        max_tokens: int = 200,
+        max_tokens: int = 1500,
         timeout: int = 30,
     ) -> None:
         self.model = model

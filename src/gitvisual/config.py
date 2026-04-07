@@ -29,10 +29,10 @@ class LLMConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     provider: str = "openrouter"
-    model: str = "openrouter/anthropic/claude-3-haiku"
+    model: str = "openrouter/liquid/lfm-2.5-1.2b-thinking:free"
     api_key_env: str = "OPENROUTER_API_KEY"
     api_base: str | None = None
-    max_tokens: int = 200
+    max_tokens: int = 1500
     timeout: int = 30
 
 
@@ -132,9 +132,9 @@ summarize = false
 
 [llm]
 provider = "openrouter"
-model = "openrouter/anthropic/claude-3-haiku"   # prefix tells litellm which provider to use
+model = "openrouter/liquid/lfm-2.5-1.2b-thinking:free"  # prefix tells litellm which provider to use
 api_key_env = "OPENROUTER_API_KEY"               # name of the env var holding your key
-max_tokens = 200
+max_tokens = 1500  # thinking models consume tokens on reasoning before output; needs room
 timeout = 30
 
 [render]
