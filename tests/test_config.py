@@ -74,3 +74,50 @@ class TestWriteExampleConfig:
         # Should load without errors and match defaults
         assert config.defaults.theme == "dark"
         assert config.llm.provider == "openrouter"
+
+    def test_example_config_contains_max_tokens_grouping(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        write_example_config(path)
+        content = path.read_text()
+        assert "max_tokens_grouping" in content
+
+    def test_example_config_contains_max_groups_shown(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        write_example_config(path)
+        content = path.read_text()
+        assert "max_groups_shown" in content
+
+
+class TestLLMConfigGroupingToken:
+    def test_default_max_tokens_grouping(self) -> None:
+        from gitvisual.config import LLMConfig
+
+        cfg = LLMConfig()
+        assert cfg.max_tokens_grouping == 4096
+
+    def test_toml_override_max_tokens_grouping(self, tmp_path: Path) -> None:
+        toml = tmp_path / "config.toml"
+        toml.write_text("[llm]\nmax_tokens_grouping = 8192\n")
+        config = load_config(toml)
+        assert config.llm.max_tokens_grouping == 8192
+
+    def test_max_tokens_grouping_independent_of_max_tokens(self) -> None:
+        """max_tokens_grouping and max_tokens are independent fields."""
+        from gitvisual.config import LLMConfig
+
+        cfg = LLMConfig()
+        assert cfg.max_tokens_grouping != cfg.max_tokens
+
+
+class TestRenderConfigMaxGroupsShown:
+    def test_default_max_groups_shown(self) -> None:
+        from gitvisual.config import RenderConfig
+
+        cfg = RenderConfig()
+        assert cfg.max_groups_shown == 10
+
+    def test_toml_override_max_groups_shown(self, tmp_path: Path) -> None:
+        toml = tmp_path / "config.toml"
+        toml.write_text("[render]\nmax_groups_shown = 5\n")
+        config = load_config(toml)
+        assert config.render.max_groups_shown == 5
