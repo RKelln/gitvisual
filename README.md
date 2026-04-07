@@ -20,13 +20,19 @@ The output is a portable PNG — drop it into a daily photo collage, a Notion pa
 Requires Python 3.12+. Install with [uv](https://github.com/astral-sh/uv):
 
 ```bash
-uv tool install gitvisual
+uv tool install git+https://github.com/RKelln/gitvisual
+```
+
+Upgrade to the latest release:
+
+```bash
+uv tool upgrade gitvisual
 ```
 
 Or install from source:
 
 ```bash
-git clone https://github.com/yourname/gitvisual
+git clone https://github.com/RKelln/gitvisual
 cd gitvisual
 uv sync
 uv run gitvisual --help
