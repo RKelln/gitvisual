@@ -274,6 +274,28 @@ class TestCommitGroupRendering:
         img = Image.open(out_path)
         assert img.format == "PNG"
 
+    def test_render_commit_group_empty_summary_no_crash(self, tmp_path: Path) -> None:
+        """CommitGroup with summary='' must not crash; height must match a non-empty baseline."""
+        renderer = make_renderer()
+
+        group_empty = make_commit_group(summary="")
+        group_nonempty = make_commit_group(summary="Some work done")
+
+        day_empty = make_day_summary(tmp_path=tmp_path).model_copy(
+            update={"commit_groups": [group_empty]}
+        )
+        day_nonempty = make_day_summary(tmp_path=tmp_path).model_copy(
+            update={"commit_groups": [group_nonempty]}
+        )
+
+        img_empty = renderer.render(day_empty)
+        img_nonempty = renderer.render(day_nonempty)
+
+        assert isinstance(img_empty, Image.Image)
+        # Height for empty summary must equal height for a short non-empty summary
+        # (both get exactly 1 line worth of height via the guard)
+        assert img_empty.height == img_nonempty.height
+
 
 class TestCommitGroupOverflow:
     def test_overflow_groups_truncated_to_max_groups_shown(self, tmp_path: Path) -> None:

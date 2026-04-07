@@ -265,7 +265,9 @@ def generate(
                     if summary:
                         day = day.model_copy(update={"summary": summary})
                         total_summaries += 1
-                    groups = summarizer.group_commits(day)
+                    groups = summarizer.group_commits(
+                        day, max_groups=config.render.max_groups_shown
+                    )
                     if groups is not None:
                         day = day.model_copy(update={"commit_groups": groups})
 

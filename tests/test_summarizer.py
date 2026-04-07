@@ -481,7 +481,7 @@ class TestLLMSummarizerGroupCommits:
     def test_full_hash_matching(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """LLM returning full 40-char hashes should also be matched."""
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
-        c1 = make_commit(hash="aabbccdd11223344")
+        c1 = make_commit(hash="aabbccdd" * 5)
         day = make_day_summary(commits=[c1], tmp_path=tmp_path)
 
         response = json.dumps(
@@ -524,6 +524,71 @@ class TestLLMSummarizerGroupCommits:
 
         s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
         assert s.group_commits(day) is None
+
+    def test_empty_day_returns_none_without_llm_call(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """group_commits() on an empty day must return None and never call litellm."""
+        from datetime import date
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+
+        called: list[bool] = []
+
+        fake = types.ModuleType("litellm")
+        fake.suppress_debug_info = False  # type: ignore[attr-defined]
+        fake.verbose = True  # type: ignore[attr-defined]
+
+        def no_call_completion(**kwargs: object) -> object:  # pragma: no cover
+            called.append(True)
+            raise AssertionError("litellm.completion must not be called for empty day")
+
+        fake.completion = no_call_completion  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+
+        empty_day = DaySummary(
+            date=date(2025, 4, 7), repo_path=tmp_path, repo_name="repo", commits=[]
+        )
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        result = s.group_commits(empty_day)
+
+        assert result is None
+        assert called == [], "litellm.completion was called for an empty day"
+
+    def test_missing_summary_key_uses_fallback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A group with a missing 'summary' key should use 'Untitled group' fallback;
+        other groups are unaffected."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, (c1, c2, c3) = self._make_day(tmp_path)
+
+        # c1 group has no 'summary' key; c2+c3 group has a valid summary
+        response = json.dumps(
+            {
+                "groups": [
+                    {
+                        # 'summary' key intentionally omitted
+                        "commit_hashes": [c1.short_hash],
+                    },
+                    {
+                        "summary": "Auth fixes",
+                        "commit_hashes": [c2.short_hash, c3.short_hash],
+                    },
+                ]
+            }
+        )
+        monkeypatch.setitem(sys.modules, "litellm", _make_fake_litellm(response))
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        result = s.group_commits(day)
+
+        assert result is not None
+        summaries = {g.summary for g in result}
+        # Malformed group gets fallback, not KeyError
+        assert "Untitled group" in summaries
+        # Good group is unaffected
+        assert "Auth fixes" in summaries
 
     def test_missing_groups_key_returns_none(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

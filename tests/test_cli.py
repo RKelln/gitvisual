@@ -661,3 +661,34 @@ class TestGenerateGroupCommits:
         assert len(rendered_days) == 1
         day = rendered_days[0]
         assert day.commit_groups is None
+
+    def test_stub_llm_group_commits_receives_max_groups_from_config(self, tmp_path: Path) -> None:
+        """group_commits() must be called with max_groups=config.render.max_groups_shown."""
+        from gitvisual.config import Config
+        from gitvisual.llm.summarizer import StubSummarizer
+
+        repo = self._make_repo_with_commit(tmp_path)
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        # Capture group_commits calls to verify max_groups argument
+        group_commits_calls: list[dict] = []
+        original_group_commits = StubSummarizer.group_commits
+
+        def capturing_group_commits(
+            self_inner: StubSummarizer, day: object, max_groups: object = None
+        ) -> object:
+            group_commits_calls.append({"max_groups": max_groups})
+            return original_group_commits(self_inner, day, max_groups=max_groups)  # type: ignore[arg-type]
+
+        with patch.object(StubSummarizer, "group_commits", capturing_group_commits):
+            result = runner.invoke(
+                app,
+                ["generate", str(repo), "--output", str(output_dir), "--summarize", "--stub-llm"],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert len(group_commits_calls) >= 1
+        # The value passed must match config.render.max_groups_shown (default: 10)
+        expected = Config().render.max_groups_shown
+        assert group_commits_calls[0]["max_groups"] == expected

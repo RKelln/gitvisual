@@ -295,7 +295,7 @@ class CardRenderer:
         msg_lh = cfg.heading_size + 4
 
         # --- Summary line (bold, same position as commit message) ---
-        for line in wrap_text(group.summary, fnt.heading, inner_w):
+        for line in wrap_text(group.summary, fnt.heading, inner_w) or [""]:
             draw.text((pad, y), line, font=fnt.heading, fill=pal.text)
             y += msg_lh
         y += _COMMIT_MSG_EXTRA

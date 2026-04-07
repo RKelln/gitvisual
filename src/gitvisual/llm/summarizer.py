@@ -144,6 +144,9 @@ class LLMSummarizer:
         Returns None on any error (LLM calls are always optional).
         Stats are always computed from real Commit objects — never from LLM output.
         """
+        if day.is_empty:
+            return None
+
         try:
             import litellm  # type: ignore[import-untyped,unused-ignore]
 
@@ -206,7 +209,9 @@ class LLMSummarizer:
                     if found is not None and found.short_hash not in assigned:
                         matched.append(found)
                         assigned.add(found.short_hash)
-                groups.append(CommitGroup(summary=str(raw["summary"]), commits=matched))
+                groups.append(
+                    CommitGroup(summary=str(raw.get("summary", "Untitled group")), commits=matched)
+                )
 
             # Catch-all: commits the LLM didn't assign
             unassigned = [c for c in day.commits if c.short_hash not in assigned]
