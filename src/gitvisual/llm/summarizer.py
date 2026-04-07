@@ -303,8 +303,9 @@ class LLMSummarizer:
 
         groups = self._parse_groups(group_raw, day)
         if groups is None:
-            self._dbg("  → Turn 1 parse failed — aborting session")
-            return (None, None)
+            self._dbg("  → Turn 1 parse failed — falling back to single-turn summary")
+            summary = self.summarize(day)
+            return (summary, None)
 
         self._dbg(f"  → {len(groups)} group(s) parsed")
 

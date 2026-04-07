@@ -932,10 +932,10 @@ class TestLLMSummarizerSummarizeAndGroup:
         assert len(groups) >= 1
         assert groups[0].summary == "Auth work"
 
-    def test_invalid_json_turn1_returns_none_none(
+    def test_invalid_json_turn1_falls_back_to_summary(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
     ) -> None:
-        """Invalid JSON from Turn 1 → (None, None). Error logged to stderr."""
+        """Invalid JSON from Turn 1 → fallback single-turn summary, groups=None. Error logged to stderr."""
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
         day, _ = self._make_day(tmp_path)
 
@@ -945,7 +945,9 @@ class TestLLMSummarizerSummarizeAndGroup:
 
         s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
         result = s.summarize_and_group(day)
-        assert result == (None, None)
+        summary, groups = result
+        assert groups is None
+        assert summary == "ignored"  # fallback single-turn summary returned
         captured = capsys.readouterr()
         assert "[gitvisual]" in captured.err
 

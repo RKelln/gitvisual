@@ -353,14 +353,25 @@ def generate(
                 f"  Run [bold]gitvisual config show[/bold] to review LLM settings."
             )
         else:
-            console.print(
+            msg = (
                 f"\n[yellow]No LLM summaries were generated.[/yellow] "
                 f"The LLM was reached but all calls failed (check stderr for details).\n"
                 f"  Model: [bold]{config.llm.model}[/bold]\n"
-                f"  Tip: for large commit sets, increase [bold]max_tokens_grouping[/bold] "
-                f"in [bold]~/.config/gitvisual/config.toml[/bold] (current: {config.llm.max_tokens_grouping}).\n"
-                f"  Run [bold]gitvisual config show[/bold] to review LLM settings."
             )
+            if config.llm.max_tokens_grouping < 2048:
+                msg += (
+                    f"  Tip: for large commit sets, increase [bold]max_tokens_grouping[/bold] "
+                    f"in [bold]~/.config/gitvisual/config.toml[/bold] "
+                    f"(current: {config.llm.max_tokens_grouping}).\n"
+                )
+            else:
+                msg += (
+                    "  Tip: try a different model — the current model may cap responses "
+                    "shorter than the JSON grouping output requires.\n"
+                    "  Use [bold]--debug[/bold] to see raw response length.\n"
+                )
+            msg += "  Run [bold]gitvisual config show[/bold] to review LLM settings."
+            console.print(msg)
 
 
 # ---------------------------------------------------------------------------
