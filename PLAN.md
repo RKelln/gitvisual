@@ -56,6 +56,7 @@ Repos + DateRange
     → GitCollector.collect()        # subprocess git calls → raw commit data
     → DaySummary                    # structured pydantic model per repo per day
     → Summarizer.summarize()        # LLM generates 1-2 sentence narrative (optional)
+    → Summarizer.group_commits()    # LLM clusters commits into semantic groups (optional)
     → CardRenderer.render()         # Pillow → PNG card image
     → Output files (PNG)
 ```
@@ -84,6 +85,14 @@ class Commit:
     deletions: int
     files_changed: int
 
+class CommitGroup:
+    summary: str          # LLM-generated group label/description
+    commits: list[Commit]
+    # Aggregate properties (computed from commits):
+    total_insertions: int
+    total_deletions: int
+    total_files_changed: int
+
 class DaySummary:
     date: date
     repo_name: str
@@ -92,7 +101,8 @@ class DaySummary:
     total_insertions: int
     total_deletions: int
     total_files_changed: int
-    summary: str | None  # LLM-generated, None if skipped or empty day
+    summary: str | None               # LLM-generated narrative, None if skipped
+    commit_groups: list[CommitGroup] | None  # LLM-grouped commits, None if skipped
 
 class Report:
     date_range: tuple[date, date]
@@ -150,6 +160,7 @@ model = "anthropic/claude-3-haiku"
 api_key_env = "OPENROUTER_API_KEY"   # name of env var to read
 api_base = ""                         # optional custom base URL
 max_tokens = 200
+max_tokens_grouping = 4096            # separate budget for group_commits() call
 timeout = 30
 
 [render]
@@ -158,6 +169,7 @@ min_card_height = 1200
 padding = 60
 style = "compact"
 max_files_shown = 12
+max_groups_shown = 10                 # cap on commit groups rendered on card
 
 [repos]
 scan_dirs = []
@@ -189,7 +201,9 @@ Goal: a CLI that takes a repo path + date and produces a clean, dark-themed PNG 
 - LLM summary (if enabled), word-wrapped
 - Aggregate stats bar: N commits · N files · +insertions −deletions
 - Horizontal rule
-- Per-commit rows: short hash, message (wrapped), ±stats, file list (capped)
+- If commit_groups available: per-group sections with group label + aggregate stats,
+  each showing member commit hashes + messages (capped by max_groups_shown)
+- Fallback (no groups): per-commit rows: short hash, message (wrapped), ±stats, file list (capped)
 
 **Card layout (detailed style):**
 - Same as compact but all files shown, no cap
@@ -210,6 +224,9 @@ Goal: a CLI that takes a repo path + date and produces a clean, dark-themed PNG 
 5. Card renderer (CardRenderer, FontSet, theme system, compact + detailed)
 6. CLI (generate, discover, config init/show — typer)
 7. All tests passing, mypy clean, ruff clean
+8. LLM commit grouping: CommitGroup model, group_commits() on all summarizer types,
+   card renderer groups path (_draw_commit_group), max_groups_shown config,
+   max_tokens_grouping config, --json includes commit_groups for debugging
 
 **Remaining Phase 1 work:**
 - Download and bundle Inter + JetBrains Mono `.ttf` files into `assets/fonts/`
@@ -251,6 +268,7 @@ Goal: a CLI that takes a repo path + date and produces a clean, dark-themed PNG 
 | Fonts | Bundle Inter + JetBrains Mono (OFL) | Consistent output across machines |
 | Aspect ratio | Soft 1:1, height expands | Avoids truncation complexity in v1 |
 | LLM default | off (`--summarize` opt-in) | Avoid accidental API calls |
+| Commit grouping | structured JSON output from LLM | Reliable parsing; group_commits() separate from summarize() |
 | Issue tracking | beads (`bd`) | Project convention |
 
 ---
