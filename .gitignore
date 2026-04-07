@@ -49,6 +49,14 @@ htmlcov/
 
 # Generated output (don't commit sample renders)
 output/
+*.png
+*.jpg
+
+# Local issue tracker (beads - local-only, no remote)
+.beads/
+
+# OpenCode agent config (local-only)
+.opencode/
 
 # Temporary
 tmp/
