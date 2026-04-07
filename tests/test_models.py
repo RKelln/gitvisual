@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from gitvisual.git.models import Commit, DaySummary, FileChange, Report
+from gitvisual.git.models import Commit, CommitGroup, DaySummary, FileChange, Report
 from tests.conftest import make_commit, make_day_summary
 
 
@@ -102,3 +102,94 @@ class TestReport:
         report = Report(date_from=date(2025, 4, 7), date_to=date(2025, 4, 7))
         with pytest.raises(ValidationError):
             report.days = []  # type: ignore[misc]
+
+
+class TestCommitGroup:
+    """Table-driven tests for CommitGroup property computations."""
+
+    @pytest.mark.parametrize(
+        "commits, expected_ins, expected_del, expected_files",
+        [
+            # 0 commits → all zeros
+            ([], 0, 0, 0),
+            # 1 commit
+            ([make_commit(insertions=10, deletions=5, files_changed=3)], 10, 5, 3),
+            # 3 commits with distinct stats → sums
+            (
+                [
+                    make_commit(
+                        hash="aaa" + "a" * 13,
+                        insertions=10,
+                        deletions=2,
+                        files_changed=1,
+                    ),
+                    make_commit(
+                        hash="bbb" + "b" * 13,
+                        insertions=20,
+                        deletions=3,
+                        files_changed=4,
+                    ),
+                    make_commit(
+                        hash="ccc" + "c" * 13,
+                        insertions=5,
+                        deletions=0,
+                        files_changed=2,
+                    ),
+                ],
+                35,
+                5,
+                7,
+            ),
+        ],
+    )
+    def test_totals(
+        self,
+        commits: list[Commit],
+        expected_ins: int,
+        expected_del: int,
+        expected_files: int,
+    ) -> None:
+        group = CommitGroup(summary="Test group", commits=commits)
+        assert group.total_insertions == expected_ins
+        assert group.total_deletions == expected_del
+        assert group.total_files_changed == expected_files
+
+    def test_frozen(self) -> None:
+        group = CommitGroup(summary="x", commits=[])
+        with pytest.raises(ValidationError):
+            group.summary = "y"  # type: ignore[misc]
+
+    def test_summary_field(self) -> None:
+        group = CommitGroup(summary="Refactored auth module", commits=[])
+        assert group.summary == "Refactored auth module"
+        assert group.commits == []
+
+
+class TestDaySummaryCommitGroups:
+    """Regression tests for DaySummary.commit_groups field."""
+
+    def test_commit_groups_defaults_to_none(self, tmp_path: Path) -> None:
+        day = make_day_summary(tmp_path=tmp_path)
+        assert day.commit_groups is None
+
+    def test_commit_groups_accepts_list(self, tmp_path: Path) -> None:
+        c = make_commit()
+        group = CommitGroup(summary="All work", commits=[c])
+        day = DaySummary(
+            date=date(2025, 4, 7),
+            repo_path=tmp_path,
+            repo_name="repo",
+            commits=[c],
+            commit_groups=[group],
+        )
+        assert day.commit_groups is not None
+        assert len(day.commit_groups) == 1
+        assert day.commit_groups[0].summary == "All work"
+
+    def test_commit_groups_model_copy(self, tmp_path: Path) -> None:
+        day = make_day_summary(tmp_path=tmp_path)
+        c = day.commits[0]
+        group = CommitGroup(summary="Everything", commits=[c])
+        updated = day.model_copy(update={"commit_groups": [group]})
+        assert updated.commit_groups is not None
+        assert day.commit_groups is None  # original unchanged

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import sys
+import types
 from datetime import date
 from pathlib import Path
 
@@ -162,3 +165,412 @@ class TestCleanSummary:
     def test_single_paragraph_no_quotes_returned_as_is(self) -> None:
         text = "Fixed broken config loading on first run."
         assert _clean_summary(text) == text
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_fake_litellm(response_json: str) -> types.ModuleType:
+    """Return a fake litellm module whose completion() returns response_json."""
+    from types import SimpleNamespace
+
+    fake = types.ModuleType("litellm")
+    fake.suppress_debug_info = False  # type: ignore[attr-defined]
+    fake.verbose = True  # type: ignore[attr-defined]
+
+    def completion(**kwargs: object) -> object:
+        msg = SimpleNamespace(content=response_json)
+        choice = SimpleNamespace(message=msg)
+        return SimpleNamespace(choices=[choice])
+
+    fake.completion = completion  # type: ignore[attr-defined]
+    return fake
+
+
+def _make_raising_litellm(exc: Exception) -> types.ModuleType:
+    """Return a fake litellm module whose completion() raises exc."""
+    fake = types.ModuleType("litellm")
+    fake.suppress_debug_info = False  # type: ignore[attr-defined]
+    fake.verbose = True  # type: ignore[attr-defined]
+
+    def completion(**kwargs: object) -> None:
+        raise exc
+
+    fake.completion = completion  # type: ignore[attr-defined]
+    return fake
+
+
+# ---------------------------------------------------------------------------
+# NullSummarizer.group_commits
+# ---------------------------------------------------------------------------
+
+
+class TestNullSummarizerGroupCommits:
+    def test_always_returns_none(self, tmp_path: Path) -> None:
+        s = NullSummarizer()
+        day = make_day_summary(tmp_path=tmp_path)
+        assert s.group_commits(day) is None
+
+    def test_max_groups_ignored(self, tmp_path: Path) -> None:
+        s = NullSummarizer()
+        day = make_day_summary(tmp_path=tmp_path)
+        assert s.group_commits(day, max_groups=3) is None
+
+
+# ---------------------------------------------------------------------------
+# StubSummarizer.group_commits
+# ---------------------------------------------------------------------------
+
+
+class TestStubSummarizerGroupCommits:
+    def test_returns_single_group_with_all_commits(self, tmp_path: Path) -> None:
+        s = StubSummarizer()
+        c1 = make_commit()
+        c2 = make_commit(hash="b" * 16)
+        day = make_day_summary(commits=[c1, c2], tmp_path=tmp_path)
+        result = s.group_commits(day)
+        assert result is not None
+        assert len(result) == 1
+        assert result[0].summary == "Stub: all commits grouped"
+        assert sorted(result[0].commits, key=lambda c: c.hash) == sorted(
+            [c1, c2], key=lambda c: c.hash
+        )
+
+    def test_empty_day_returns_single_empty_group(self, tmp_path: Path) -> None:
+        s = StubSummarizer()
+        day = DaySummary(date=date(2025, 4, 7), repo_path=tmp_path, repo_name="repo", commits=[])
+        result = s.group_commits(day)
+        assert result is not None
+        assert len(result) == 1
+        assert result[0].commits == []
+
+    def test_max_groups_ignored(self, tmp_path: Path) -> None:
+        s = StubSummarizer()
+        day = make_day_summary(tmp_path=tmp_path)
+        result = s.group_commits(day, max_groups=1)
+        assert result is not None
+        assert len(result) == 1
+
+
+# ---------------------------------------------------------------------------
+# LLMSummarizer.group_commits
+# ---------------------------------------------------------------------------
+
+
+class TestLLMSummarizerGroupCommits:
+    def _make_day(self, tmp_path: Path) -> tuple[DaySummary, list]:
+        c1 = make_commit(
+            hash="aabbccdd11223344",
+            message="feat: add login",
+            insertions=100,
+            deletions=10,
+            files_changed=3,
+        )
+        c2 = make_commit(
+            hash="eeff00112233445566"[:16],
+            message="fix: auth bug",
+            insertions=20,
+            deletions=5,
+            files_changed=1,
+        )
+        c3 = make_commit(
+            hash="1122334455667788",
+            message="chore: update deps",
+            insertions=5,
+            deletions=5,
+            files_changed=2,
+        )
+        day = make_day_summary(commits=[c1, c2, c3], tmp_path=tmp_path)
+        return day, [c1, c2, c3]
+
+    # --- happy path ---
+
+    def test_happy_path_all_commits_assigned(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, (c1, c2, c3) = self._make_day(tmp_path)
+
+        response = json.dumps(
+            {
+                "groups": [
+                    {
+                        "summary": "Auth work",
+                        "commit_hashes": [c1.short_hash, c2.short_hash],
+                    },
+                    {
+                        "summary": "Maintenance",
+                        "commit_hashes": [c3.short_hash],
+                    },
+                ]
+            }
+        )
+        monkeypatch.setitem(sys.modules, "litellm", _make_fake_litellm(response))
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        result = s.group_commits(day)
+
+        assert result is not None
+        assert len(result) == 2
+        summaries = {g.summary for g in result}
+        assert "Auth work" in summaries
+        assert "Maintenance" in summaries
+
+    def test_stats_computed_from_real_commits_not_llm(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Stats must come from real Commit objects, never from LLM output."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, (c1, c2, c3) = self._make_day(tmp_path)
+
+        response = json.dumps(
+            {
+                "groups": [
+                    {
+                        "summary": "All",
+                        "commit_hashes": [c1.short_hash, c2.short_hash, c3.short_hash],
+                        # LLM might hallucinate extra fields — they must be ignored
+                        "total_insertions": 99999,
+                        "total_deletions": 99999,
+                    }
+                ]
+            }
+        )
+        monkeypatch.setitem(sys.modules, "litellm", _make_fake_litellm(response))
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        result = s.group_commits(day)
+
+        assert result is not None
+        group = result[0]
+        # Real stats: c1(100,10,3) + c2(20,5,1) + c3(5,5,2)
+        assert group.total_insertions == 125
+        assert group.total_deletions == 20
+        assert group.total_files_changed == 6
+
+    # --- max_groups hint ---
+
+    def test_max_groups_hint_in_prompt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, _commits = self._make_day(tmp_path)
+
+        captured_kwargs: dict = {}
+
+        def capturing_completion(**kwargs: object) -> object:
+            from types import SimpleNamespace
+
+            captured_kwargs.update(kwargs)
+            content = json.dumps(
+                {
+                    "groups": [
+                        {
+                            "summary": "g",
+                            "commit_hashes": [c.short_hash for c in day.commits],
+                        }
+                    ]
+                }
+            )
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+            )
+
+        fake = types.ModuleType("litellm")
+        fake.suppress_debug_info = False  # type: ignore[attr-defined]
+        fake.verbose = True  # type: ignore[attr-defined]
+        fake.completion = capturing_completion  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        s.group_commits(day, max_groups=4)
+
+        # The hint "4" must appear somewhere in the messages sent to litellm
+        messages = captured_kwargs.get("messages", [])
+        all_text = " ".join(str(m.get("content", "")) for m in messages)  # type: ignore[union-attr]
+        assert "4" in all_text
+
+    # --- partial assignment → catch-all ---
+
+    def test_partial_assignment_creates_catchall(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, (c1, c2, c3) = self._make_day(tmp_path)
+
+        # LLM only assigns c1 — c2 and c3 should land in "Other changes"
+        response = json.dumps(
+            {
+                "groups": [
+                    {"summary": "Login feature", "commit_hashes": [c1.short_hash]},
+                ]
+            }
+        )
+        monkeypatch.setitem(sys.modules, "litellm", _make_fake_litellm(response))
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        result = s.group_commits(day)
+
+        assert result is not None
+        summaries = {g.summary for g in result}
+        assert "Other changes" in summaries
+        catchall = next(g for g in result if g.summary == "Other changes")
+        assert sorted(catchall.commits, key=lambda c: c.hash) == sorted(
+            [c2, c3], key=lambda c: c.hash
+        )
+
+    def test_all_unassigned_creates_single_catchall(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, commits = self._make_day(tmp_path)
+
+        # LLM returns empty groups list
+        response = json.dumps({"groups": []})
+        monkeypatch.setitem(sys.modules, "litellm", _make_fake_litellm(response))
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        result = s.group_commits(day)
+
+        assert result is not None
+        assert len(result) == 1
+        assert result[0].summary == "Other changes"
+        assert sorted(result[0].commits, key=lambda c: c.hash) == sorted(
+            commits, key=lambda c: c.hash
+        )
+
+    # --- unrecognised hash silently ignored ---
+
+    def test_unrecognised_hash_silently_ignored(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, (c1, c2, c3) = self._make_day(tmp_path)
+
+        response = json.dumps(
+            {
+                "groups": [
+                    {
+                        "summary": "Real work",
+                        "commit_hashes": [c1.short_hash, "deadbeef"],  # deadbeef is bogus
+                    },
+                    {
+                        "summary": "Other",
+                        "commit_hashes": [c2.short_hash, c3.short_hash],
+                    },
+                ]
+            }
+        )
+        monkeypatch.setitem(sys.modules, "litellm", _make_fake_litellm(response))
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        result = s.group_commits(day)
+
+        assert result is not None
+        # "deadbeef" is ignored; c1 in "Real work", no catch-all needed
+        real_work = next(g for g in result if g.summary == "Real work")
+        assert real_work.commits == [c1]
+        # No "Other changes" catch-all because all real commits were assigned
+        summaries = {g.summary for g in result}
+        assert "Other changes" not in summaries
+
+    # --- full hash matching ---
+
+    def test_full_hash_matching(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """LLM returning full 40-char hashes should also be matched."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        c1 = make_commit(hash="aabbccdd11223344")
+        day = make_day_summary(commits=[c1], tmp_path=tmp_path)
+
+        response = json.dumps(
+            {"groups": [{"summary": "Full hash group", "commit_hashes": [c1.hash]}]}
+        )
+        monkeypatch.setitem(sys.modules, "litellm", _make_fake_litellm(response))
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        result = s.group_commits(day)
+
+        assert result is not None
+        assert len(result) == 1
+        assert result[0].commits == [c1]
+
+    # --- error handling ---
+
+    def test_invalid_json_returns_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day = make_day_summary(tmp_path=tmp_path)
+        monkeypatch.setitem(sys.modules, "litellm", _make_fake_litellm("not valid json!!!"))
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        assert s.group_commits(day) is None
+
+    def test_exception_returns_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day = make_day_summary(tmp_path=tmp_path)
+        monkeypatch.setitem(sys.modules, "litellm", _make_raising_litellm(RuntimeError("boom")))
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        assert s.group_commits(day) is None
+
+    def test_missing_api_key_returns_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        day = make_day_summary(tmp_path=tmp_path)
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        assert s.group_commits(day) is None
+
+    def test_missing_groups_key_returns_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """JSON without a 'groups' key should be handled gracefully."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day = make_day_summary(tmp_path=tmp_path)
+        monkeypatch.setitem(
+            sys.modules, "litellm", _make_fake_litellm(json.dumps({"result": "oops"}))
+        )
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        assert s.group_commits(day) is None
+
+    def test_response_format_json_object_in_kwargs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """response_format={"type": "json_object"} must be forwarded to litellm."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, commits = self._make_day(tmp_path)
+        captured: dict = {}
+
+        def capturing_completion(**kwargs: object) -> object:
+            from types import SimpleNamespace
+
+            captured.update(kwargs)
+            content = json.dumps(
+                {
+                    "groups": [
+                        {
+                            "summary": "g",
+                            "commit_hashes": [c.short_hash for c in commits],
+                        }
+                    ]
+                }
+            )
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+            )
+
+        fake = types.ModuleType("litellm")
+        fake.suppress_debug_info = False  # type: ignore[attr-defined]
+        fake.verbose = True  # type: ignore[attr-defined]
+        fake.completion = capturing_completion  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        s.group_commits(day)
+
+        assert captured.get("response_format") == {"type": "json_object"}

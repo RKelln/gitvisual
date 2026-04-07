@@ -37,6 +37,27 @@ class Commit(BaseModel):
     files_changed: int = 0
 
 
+class CommitGroup(BaseModel):
+    """A semantically-grouped cluster of commits with a plain-language summary."""
+
+    model_config = ConfigDict(frozen=True)
+
+    summary: str
+    commits: list[Commit] = Field(default_factory=list)
+
+    @property
+    def total_insertions(self) -> int:
+        return sum(c.insertions for c in self.commits)
+
+    @property
+    def total_deletions(self) -> int:
+        return sum(c.deletions for c in self.commits)
+
+    @property
+    def total_files_changed(self) -> int:
+        return sum(c.files_changed for c in self.commits)
+
+
 class DaySummary(BaseModel):
     """All commits for one day in one repository."""
 
@@ -47,6 +68,7 @@ class DaySummary(BaseModel):
     repo_name: str  # basename or configured name
     commits: list[Commit] = Field(default_factory=list)
     summary: str | None = None  # LLM-generated summary
+    commit_groups: list[CommitGroup] | None = None  # LLM-grouped commit clusters
 
     @property
     def total_insertions(self) -> int:
