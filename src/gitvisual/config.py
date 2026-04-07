@@ -29,7 +29,7 @@ class LLMConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     provider: str = "openrouter"
-    model: str = "openrouter/liquid/lfm-2.5-1.2b-thinking:free"
+    model: str = "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
     api_key_env: str = "OPENROUTER_API_KEY"
     api_base: str | None = None
     max_tokens: int = 1500
@@ -132,7 +132,7 @@ summarize = false
 
 [llm]
 provider = "openrouter"
-model = "openrouter/liquid/lfm-2.5-1.2b-thinking:free"  # prefix tells litellm which provider to use
+model = "openrouter/nvidia/nemotron-3-super-120b-a12b:free"  # prefix tells litellm which provider to use
 api_key_env = "OPENROUTER_API_KEY"               # name of the env var holding your key
 max_tokens = 1500  # thinking models consume tokens on reasoning before output; needs room
 timeout = 30

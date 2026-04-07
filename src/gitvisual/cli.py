@@ -114,6 +114,16 @@ def generate(
         bool,
         typer.Option("--stub-llm", hidden=True, help="Use stub LLM (for testing)."),
     ] = False,
+    model: Annotated[
+        str | None,
+        typer.Option(
+            "--model", "-m", help="LLM model override (e.g. openrouter/openai/gpt-4o-mini)."
+        ),
+    ] = None,
+    max_tokens: Annotated[
+        int | None,
+        typer.Option("--max-tokens", help="Override max_tokens for LLM calls."),
+    ] = None,
 ) -> None:
     """Generate visual cards from git commit history."""
     config = load_config(config_path)
@@ -163,10 +173,10 @@ def generate(
 
     summarizer = make_summarizer(
         enabled=summarize,
-        model=config.llm.model,
+        model=model or config.llm.model,
         api_key_env=config.llm.api_key_env,
         api_base=config.llm.api_base,
-        max_tokens=config.llm.max_tokens,
+        max_tokens=max_tokens if max_tokens is not None else config.llm.max_tokens,
         timeout=config.llm.timeout,
         stub=stub_llm,
     )
@@ -208,9 +218,10 @@ def generate(
 
                 card_path = _output_path(out_dir, day.repo_name, current)
                 renderer.render_to_file(day, card_path)
+                summary_preview = f" — [italic]{day.summary}[/italic]" if day.summary else ""
                 console.print(
                     f"[green]✓[/green]  {current}  {day.repo_name}: "
-                    f"{len(day.commits)} commit(s) → {card_path}"
+                    f"{len(day.commits)} commit(s) → {card_path}{summary_preview}"
                 )
                 out.print(str(card_path))
                 total_cards += 1

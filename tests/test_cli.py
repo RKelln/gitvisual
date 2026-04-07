@@ -482,3 +482,77 @@ class TestGenerateLLMSummary:
         assert len(cards) == 1
         # No post-generate failure warning
         assert "no llm summaries" not in result.output.lower()
+
+    def test_model_flag_overrides_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--model flag overrides the model from config."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        repo = self._make_repo_with_commit(tmp_path)
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = "Did some work."
+        captured: dict[str, object] = {}
+
+        def capture_completion(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            return mock_response
+
+        with (
+            patch("dotenv.load_dotenv"),
+            patch("litellm.completion", side_effect=capture_completion),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "generate",
+                    str(repo),
+                    "--output",
+                    str(output_dir),
+                    "--summarize",
+                    "--model",
+                    "openrouter/openai/gpt-4o-mini",
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert captured.get("model") == "openrouter/openai/gpt-4o-mini"
+
+    def test_max_tokens_flag_overrides_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--max-tokens flag overrides max_tokens from config."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        repo = self._make_repo_with_commit(tmp_path)
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = "Did some work."
+        captured: dict[str, object] = {}
+
+        def capture_completion(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            return mock_response
+
+        with (
+            patch("dotenv.load_dotenv"),
+            patch("litellm.completion", side_effect=capture_completion),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "generate",
+                    str(repo),
+                    "--output",
+                    str(output_dir),
+                    "--summarize",
+                    "--max-tokens",
+                    "42",
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert captured.get("max_tokens") == 42

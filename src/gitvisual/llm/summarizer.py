@@ -48,8 +48,10 @@ class LLMSummarizer:
             )
         lines.append("")
         lines.append(
-            "Write a summary of what was accomplished today. "
-            "Focus on high-level outcomes — do not rephrase the commit messages."
+            "Write a one-sentence summary of what was accomplished today.\n"
+            "- If this looks like a new project or initial setup, describe what the project IS and what was built.\n"
+            "- Otherwise, describe the most significant change and why it matters.\n"
+            "- Be specific — a reader should understand the work without reading the commits."
         )
         return "\n".join(lines)
 
@@ -75,11 +77,11 @@ class LLMSummarizer:
 
         prompt = self._build_prompt(day)
         system = (
-            "You write one-sentence summaries of a day's coding work for a visual infographic card. "
-            "Start with an action verb (e.g. 'Improved...', 'Fixed...', 'Added...', 'Refactored...'). "
-            "Focus on outcomes, not implementation details. "
-            "No filenames, no technical jargon, no more than two sentences. "
-            "Reply with only the summary — no preamble or explanation."
+            "You write short summaries of a day's coding work for a visual progress card. "
+            "Rules: start with an action verb (Built, Started, Fixed, Added, Shipped, Refactored, etc.). "
+            "Name what was built or changed — do not be vague. "
+            "One sentence; two at most. No filenames, no jargon. "
+            "Reply with only the summary — no preamble, explanation, or enclosing quotes."
         )
 
         try:
