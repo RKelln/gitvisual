@@ -287,6 +287,20 @@ def generate(
                         "commits": len(day.commits),
                         "card_path": str(card_path),
                         "summary": day.summary,
+                        "commit_groups": [
+                            {
+                                "summary": g.summary,
+                                "insertions": g.total_insertions,
+                                "deletions": g.total_deletions,
+                                "files_changed": g.total_files_changed,
+                                "commits": [
+                                    {"hash": c.short_hash, "message": c.message} for c in g.commits
+                                ],
+                            }
+                            for g in day.commit_groups
+                        ]
+                        if day.commit_groups is not None
+                        else None,
                     }
                 )
                 if not json_output:
