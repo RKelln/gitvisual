@@ -39,16 +39,18 @@ class LLMSummarizer:
         lines = [
             f"Repository: {day.repo_name}",
             f"Date: {day.date}",
-            f"Commits: {len(day.commits)}",
             "",
+            "Commits:",
         ]
-        for i, commit in enumerate(day.commits, 1):
-            lines.append(f"{i}. {commit.message}")
-            if commit.body:
-                lines.append(f"   {commit.body[:200]}")
+        for commit in day.commits:
             lines.append(
-                f"   +{commit.insertions} -{commit.deletions} in {commit.files_changed} files"
+                f"- {commit.message} (+{commit.insertions} -{commit.deletions}, {commit.files_changed} files)"
             )
+        lines.append("")
+        lines.append(
+            "Write a summary of what was accomplished today. "
+            "Focus on high-level outcomes — do not rephrase the commit messages."
+        )
         return "\n".join(lines)
 
     def summarize(self, day: DaySummary) -> str | None:
@@ -61,6 +63,9 @@ class LLMSummarizer:
 
         try:
             import litellm  # type: ignore[import-untyped,unused-ignore]
+
+            litellm.suppress_debug_info = True
+            litellm.verbose = False
         except ImportError:
             return None
 
@@ -70,10 +75,11 @@ class LLMSummarizer:
 
         prompt = self._build_prompt(day)
         system = (
-            "You summarize software development activity for a daily coding journal. "
-            "Write 1-2 sentences in simple, friendly, non-technical language. "
-            "Focus on what was accomplished (outcomes), not implementation details. "
-            "Start with an action verb. Be concise — this text appears in an infographic."
+            "You write one-sentence summaries of a day's coding work for a visual infographic card. "
+            "Start with an action verb (e.g. 'Improved...', 'Fixed...', 'Added...', 'Refactored...'). "
+            "Focus on outcomes, not implementation details. "
+            "No filenames, no technical jargon, no more than two sentences. "
+            "Reply with only the summary — no preamble or explanation."
         )
 
         try:
@@ -85,6 +91,8 @@ class LLMSummarizer:
                 ],
                 "max_tokens": self.max_tokens,
                 "timeout": self.timeout,
+                # Tell OpenRouter not to include chain-of-thought in the completion
+                "extra_body": {"reasoning": {"exclude": True}},
             }
             if self.api_base:
                 kwargs["api_base"] = self.api_base
@@ -93,9 +101,40 @@ class LLMSummarizer:
 
             response = litellm.completion(**kwargs)
             content = response.choices[0].message.content
-            return content.strip() if content else None
+            return _clean_summary(content) if content else None
         except Exception:
             return None
+
+
+def _clean_summary(text: str) -> str | None:
+    """Strip reasoning preamble that some models leak into the completion.
+
+    Reasoning models sometimes output their chain-of-thought before the final
+    answer. Strategy (in priority order):
+
+    1. Extract the last double-quoted sentence — reasoning models commonly wrap
+       their final answer in quotes, e.g. 'So the answer is "Improved X."'
+    2. Take the last non-empty paragraph (works for models that put thinking in
+       early paragraphs and the answer in the final one).
+    """
+    import re
+
+    text = text.strip()
+    if not text:
+        return None
+
+    # Strategy 1: find the last double-quoted string that looks like a sentence
+    # (starts with a capital letter, at least 20 chars, ends with punctuation)
+    quoted: list[str] = re.findall(r'"([A-Z][^"]{19,}[.!?])"', text)
+    if quoted:
+        return quoted[-1]
+
+    # Strategy 2: split into paragraphs, return the last non-empty one
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    if not paragraphs:
+        return None
+
+    return paragraphs[-1]
 
 
 class StubSummarizer:

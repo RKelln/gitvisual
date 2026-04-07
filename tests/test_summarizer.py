@@ -12,6 +12,7 @@ from gitvisual.llm.summarizer import (
     LLMSummarizer,
     NullSummarizer,
     StubSummarizer,
+    _clean_summary,
     make_summarizer,
 )
 from tests.conftest import make_commit, make_day_summary
@@ -122,3 +123,42 @@ class TestMakeSummarizer:
     def test_enabled_returns_llm_summarizer(self) -> None:
         s = make_summarizer(enabled=True, model="openai/gpt-4o-mini", api_key_env="KEY")
         assert isinstance(s, LLMSummarizer)
+
+
+class TestCleanSummary:
+    def test_plain_summary_passes_through(self) -> None:
+        text = "Improved the card renderer with better font handling."
+        assert _clean_summary(text) == text
+
+    def test_empty_returns_none(self) -> None:
+        assert _clean_summary("") is None
+        assert _clean_summary("   ") is None
+
+    def test_extracts_quoted_sentence_from_reasoning(self) -> None:
+        # Nemotron-style: reasoning inline, final answer in double quotes
+        text = (
+            "Outcome: they built core stuff. So high-level: "
+            '"Implemented core features for a visual Git summary tool." '
+            "That's one sentence, starts with 'Implemented'."
+        )
+        result = _clean_summary(text)
+        assert result == "Implemented core features for a visual Git summary tool."
+
+    def test_extracts_last_quoted_sentence_when_multiple(self) -> None:
+        text = (
+            'First attempt: "Added tests." But wait, let me reconsider. '
+            'Better answer: "Refactored the summarizer to handle reasoning models robustly."'
+        )
+        result = _clean_summary(text)
+        assert result == "Refactored the summarizer to handle reasoning models robustly."
+
+    def test_last_paragraph_used_when_no_quotes(self) -> None:
+        text = "Let me think about this.\n\nAdded dark theme support to the card renderer."
+        assert _clean_summary(text) == "Added dark theme support to the card renderer."
+
+    def test_strips_leading_trailing_whitespace(self) -> None:
+        assert _clean_summary("  Fixed a bug.  ") == "Fixed a bug."
+
+    def test_single_paragraph_no_quotes_returned_as_is(self) -> None:
+        text = "Fixed broken config loading on first run."
+        assert _clean_summary(text) == text
