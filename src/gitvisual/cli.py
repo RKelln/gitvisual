@@ -1,0 +1,360 @@
+"""Typer CLI entry point: generate, discover, config commands."""
+
+from __future__ import annotations
+
+from datetime import date, timedelta
+from pathlib import Path
+from typing import Annotated
+
+import typer
+from rich.console import Console
+from rich.table import Table
+
+from gitvisual.config import Config, get_config_path, load_config, write_example_config
+from gitvisual.git.collector import (
+    GitCollectorError,
+    collect_day,
+    discover_repos,
+    is_git_repo,
+)
+from gitvisual.llm.summarizer import make_summarizer
+from gitvisual.render.card import CardRenderer
+from gitvisual.render.themes import Palette, resolve_font_paths
+
+app = typer.Typer(
+    name="gitvisual",
+    help="Generate beautiful visual cards from git commit history.",
+    add_completion=False,
+)
+
+console = Console(stderr=True)
+out = Console()  # stdout for machine-readable output
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_renderer(config: Config) -> CardRenderer:
+    palette = Palette.from_theme(config.theme)
+    fonts = resolve_font_paths(
+        font_regular=config.render.font_regular,
+        font_mono=config.render.font_mono,
+    )
+    return CardRenderer(config=config.render, palette=palette, fonts=fonts)
+
+
+def _parse_date(value: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        console.print(f"[red]Invalid date '{value}'. Use YYYY-MM-DD format.[/red]")
+        raise typer.Exit(1) from None
+
+
+def _output_path(
+    base_dir: Path,
+    repo_name: str,
+    target_date: date,
+) -> Path:
+    filename = f"{target_date.isoformat()}_{repo_name}.png"
+    return base_dir / filename
+
+
+# ---------------------------------------------------------------------------
+# generate command
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def generate(
+    repos: Annotated[
+        list[Path],
+        typer.Argument(help="Repository path(s) to generate cards for."),
+    ],
+    date_str: Annotated[
+        str | None,
+        typer.Option("--date", "-d", help="Target date (YYYY-MM-DD). Defaults to today."),
+    ] = None,
+    yesterday: Annotated[
+        bool,
+        typer.Option("--yesterday", help="Use yesterday's date."),
+    ] = False,
+    date_from: Annotated[
+        str | None,
+        typer.Option("--from", help="Start of date range (YYYY-MM-DD)."),
+    ] = None,
+    date_to: Annotated[
+        str | None,
+        typer.Option("--to", help="End of date range (YYYY-MM-DD). Defaults to --from."),
+    ] = None,
+    last_week: Annotated[
+        bool,
+        typer.Option("--last-week", help="Generate cards for the last 7 days."),
+    ] = False,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Output directory (default: current dir)."),
+    ] = None,
+    summarize: Annotated[
+        bool,
+        typer.Option("--summarize/--no-summary", help="Enable LLM summary generation."),
+    ] = False,
+    style: Annotated[
+        str | None,
+        typer.Option("--style", help="Card style: compact | detailed"),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Path to config.toml"),
+    ] = None,
+    stub_llm: Annotated[
+        bool,
+        typer.Option("--stub-llm", hidden=True, help="Use stub LLM (for testing)."),
+    ] = False,
+) -> None:
+    """Generate visual cards from git commit history."""
+    config = load_config(config_path)
+
+    # Resolve date range
+    today = date.today()
+    if last_week:
+        d_from = today - timedelta(days=6)
+        d_to = today
+    elif date_from:
+        d_from = _parse_date(date_from)
+        d_to = _parse_date(date_to) if date_to else d_from
+    elif yesterday:
+        d_from = d_to = today - timedelta(days=1)
+    elif date_str:
+        d_from = d_to = _parse_date(date_str)
+    else:
+        d_from = d_to = today
+
+    # Resolve output dir
+    out_dir = output or Path(config.defaults.output_dir)
+    out_dir = out_dir.expanduser().resolve()
+
+    # Build renderer (allow style override)
+
+    render_cfg = config.render
+    if style:
+        render_cfg = render_cfg.model_copy(update={"style": style})
+        # Rebuild config with updated render
+        config = Config(
+            defaults=config.defaults,
+            llm=config.llm,
+            render=render_cfg,
+            repos=config.repos,
+            theme=config.theme,
+        )
+
+    renderer = _make_renderer(config)
+    summarizer = make_summarizer(
+        enabled=summarize,
+        model=config.llm.model,
+        api_key_env=config.llm.api_key_env,
+        api_base=config.llm.api_base,
+        max_tokens=config.llm.max_tokens,
+        timeout=config.llm.timeout,
+        stub=stub_llm,
+    )
+
+    current = d_from
+    total_cards = 0
+    from datetime import timedelta as td
+
+    while current <= d_to:
+        for repo_path in repos:
+            repo_path = repo_path.expanduser().resolve()
+            if not is_git_repo(repo_path):
+                console.print(f"[yellow]Skipping {repo_path}: not a git repo[/yellow]")
+                continue
+            try:
+                day = collect_day(repo_path, current)
+                if day.is_empty:
+                    console.print(f"[dim]{current}  {day.repo_name}: no commits[/dim]")
+                    continue
+
+                if summarize or stub_llm:
+                    summary = summarizer.summarize(day)
+                    if summary:
+                        day = day.model_copy(update={"summary": summary})
+
+                card_path = _output_path(out_dir, day.repo_name, current)
+                renderer.render_to_file(day, card_path)
+                console.print(
+                    f"[green]✓[/green]  {current}  {day.repo_name}: "
+                    f"{len(day.commits)} commit(s) → {card_path}"
+                )
+                out.print(str(card_path))
+                total_cards += 1
+
+            except GitCollectorError as e:
+                console.print(f"[red]Error collecting {repo_path}: {e}[/red]")
+
+        current += td(days=1)
+
+    if total_cards == 0:
+        console.print("[dim]No cards generated.[/dim]")
+
+
+# ---------------------------------------------------------------------------
+# discover command
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def discover(
+    search_path: Annotated[
+        Path,
+        typer.Argument(help="Directory to search for git repositories."),
+    ],
+    date_str: Annotated[
+        str | None,
+        typer.Option("--date", "-d", help="Check for activity on this date (YYYY-MM-DD)."),
+    ] = None,
+    yesterday: Annotated[
+        bool,
+        typer.Option("--yesterday", help="Use yesterday's date."),
+    ] = False,
+    generate_cards: Annotated[
+        bool,
+        typer.Option("--generate", "-g", help="Also generate cards for repos with activity."),
+    ] = False,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Output directory for generated cards."),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Path to config.toml"),
+    ] = None,
+) -> None:
+    """Find git repositories with commit activity on a given date."""
+    config = load_config(config_path)
+
+    today = date.today()
+    if yesterday:
+        target = today - timedelta(days=1)
+    elif date_str:
+        target = _parse_date(date_str)
+    else:
+        target = today
+
+    search_path = search_path.expanduser().resolve()
+    repos = discover_repos(search_path)
+
+    if not repos:
+        console.print(f"[yellow]No git repositories found under {search_path}[/yellow]")
+        raise typer.Exit(0)
+
+    console.print(
+        f"Found [bold]{len(repos)}[/bold] repositories. Checking for activity on {target}…\n"
+    )
+
+    active_repos: list[Path] = []
+    for repo_path in repos:
+        try:
+            day = collect_day(repo_path, target)
+            if not day.is_empty:
+                active_repos.append(repo_path)
+                console.print(f"[green]✓[/green]  {day.repo_name}: {len(day.commits)} commit(s)")
+                out.print(str(repo_path))
+        except GitCollectorError:
+            pass
+
+    if not active_repos:
+        console.print(f"\n[dim]No activity found on {target}.[/dim]")
+        raise typer.Exit(0)
+
+    console.print(f"\n[bold]{len(active_repos)}[/bold] active repos on {target}.")
+
+    if generate_cards:
+        generate(
+            repos=active_repos,
+            date_str=target.isoformat(),
+            yesterday=False,
+            date_from=None,
+            date_to=None,
+            last_week=False,
+            output=output,
+            summarize=config.defaults.summarize,
+            style=None,
+            config_path=config_path,
+            stub_llm=False,
+        )
+
+
+# ---------------------------------------------------------------------------
+# config command group
+# ---------------------------------------------------------------------------
+
+
+config_app = typer.Typer(name="config", help="Manage gitvisual configuration.")
+app.add_typer(config_app)
+
+
+@config_app.command("init")
+def config_init(
+    path: Annotated[
+        Path | None,
+        typer.Option("--path", help="Write config to this path instead of the default."),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Overwrite existing config."),
+    ] = False,
+) -> None:
+    """Create a default config.toml."""
+    target = path or get_config_path()
+    if target.exists() and not force:
+        console.print(
+            f"[yellow]Config already exists at {target}. Use --force to overwrite.[/yellow]"
+        )
+        raise typer.Exit(1)
+    write_example_config(target)
+    console.print(f"[green]✓[/green]  Config written to {target}")
+
+
+@config_app.command("show")
+def config_show(
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Path to config.toml"),
+    ] = None,
+) -> None:
+    """Show the current configuration."""
+    path = config_path or get_config_path()
+    config = load_config(path)
+
+    table = Table(title=f"Config: {path}", show_header=True)
+    table.add_column("Section", style="cyan")
+    table.add_column("Key", style="white")
+    table.add_column("Value", style="green")
+
+    for section, obj in [
+        ("defaults", config.defaults),
+        ("llm", config.llm),
+        ("render", config.render),
+        ("repos", config.repos),
+        ("theme", config.theme),
+    ]:
+        for key, value in obj.model_dump().items():
+            table.add_row(section, key, str(value))
+
+    out.print(table)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    app()
+
+
+if __name__ == "__main__":
+    main()

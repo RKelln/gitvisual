@@ -1,40 +1,96 @@
-# Agent Instructions
+# AGENTS.md
 
-This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
+Python 3.12+. Typer CLI. Pillow rendering. litellm for LLM. uv for dependencies.
 
-## Quick Reference
+## Defaults
 
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work atomically
-bd close <id>         # Complete work
-bd dolt push          # Push beads data to remote
+- TDD: failing tests first, use pytest, table-driven where appropriate
+- Use `bd` (beads) for task tracking — not markdown todo lists
+- Use `context7` MCP server for external library docs
+- Act without confirmation unless blocked by missing info or irreversibility
+- When stuck (cryptic errors, multiple failed approaches): escalate via Task tool with `subagent_type: "diagnose"`
+
+## Design
+
+See `PLAN.md` for the full design plan (architecture, phases, data models, CLI interface, test strategy).
+Key decisions:
+- CLI via `typer`, data models via `pydantic`, rendering via `Pillow`
+- LLM via `litellm` (model-agnostic; supports OpenRouter, OpenAI, Anthropic, Ollama)
+- Git data via `subprocess` calling the git CLI (not GitPython)
+- Config via TOML (`~/.config/gitvisual/config.toml`)
+- Fonts bundled in `assets/fonts/` (Inter + JetBrains Mono, OFL licensed)
+- Output: square-ish cards (soft 1:1 target, height expands for content)
+
+## Project Structure
+
+```
+src/gitvisual/
+  cli.py            -- Typer CLI entry point (generate, discover, config commands)
+  config.py         -- TOML config loading, defaults, path resolution
+  git/
+    collector.py    -- Git data extraction via subprocess
+    models.py       -- Pydantic models: FileChange, Commit, DaySummary, Report
+  llm/
+    summarizer.py   -- litellm integration, prompt engineering, OpenRouter support
+  render/
+    card.py         -- Phase 1 card renderer
+    components.py   -- Reusable visual components
+    themes.py       -- Color palettes and typography
+assets/fonts/       -- Bundled Inter + JetBrains Mono fonts
+tests/              -- pytest suite, mirrors src/ structure
 ```
 
-## Non-Interactive Shell Commands
+## Fast Path
 
-**ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
-
-Shell commands like `cp`, `mv`, and `rm` may be aliased to include `-i` (interactive) mode on some systems, causing the agent to hang indefinitely waiting for y/n input.
-
-**Use these forms instead:**
 ```bash
-# Force overwrite without prompting
-cp -f source dest           # NOT: cp source dest
-mv -f source dest           # NOT: mv source dest
-rm -f file                  # NOT: rm file
+# Install dependencies
+uv sync
 
-# For recursive operations
-rm -rf directory            # NOT: rm -r directory
-cp -rf source dest          # NOT: cp -r source dest
+# Run all tests
+scripts/agent-run.sh uv run pytest
+
+# Run tests with coverage
+scripts/agent-run.sh uv run pytest --cov=gitvisual --cov-report=term-missing
+
+# Lint
+scripts/agent-run.sh uv run ruff check src/ tests/
+
+# Format
+uv run ruff format src/ tests/
+
+# Type check
+scripts/agent-run.sh uv run mypy src/
+
+# Run CLI locally
+uv run gitvisual --help
+
+# CI gate before committing
+scripts/agent-run.sh make ci
 ```
 
-**Other commands that may prompt:**
-- `scp` - use `-o BatchMode=yes` for non-interactive
-- `ssh` - use `-o BatchMode=yes` to fail instead of prompting
-- `apt-get` - use `-y` flag
-- `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
+**Always wrap build/test/lint/long-output commands with `scripts/agent-run.sh`** — captures verbose output to `.agent-output/`, shows only summary.
+
+## Conventions
+
+- **Assertions:** pytest `assert` statements; no unittest-style self.assert*
+- **Error handling:** raise specific exceptions; never silently swallow errors in non-optional paths
+- **LLM calls:** always optional — every command must work with `--no-summary`
+- **Subprocess:** always use `check=True`, capture stderr, use `text=True`
+- **Types:** full type annotations on all public functions and methods
+- **Immutability:** pydantic models are `model_config = ConfigDict(frozen=True)`
+- **Tests:** fixture git repos live in `tests/fixtures/`; use `tmp_path` for output
+
+## Commit Messages
+
+Conventional Commits with `Generated-by` trailer:
+
+```
+feat(render): add dark theme card layout
+
+Generated-by: <your-model-name>
+```
+
+Types: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`. Scope is optional.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
@@ -52,7 +108,8 @@ bd close <id>         # Complete work
 
 ### Rules
 
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
+- Use `bd` for ALL inter-task tracking, and other todo tools for intra-task tracking while working on a bead
+- Creating and updating documentation files (PLAN.md, README.md, design docs, etc.) is encouraged — docs are part of the codebase
 - Run `bd prime` for detailed command reference and session close protocol
 - Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
 
