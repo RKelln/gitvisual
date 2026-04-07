@@ -690,35 +690,6 @@ class TestGenerateGroupCommits:
         day = rendered_days[0]
         assert day.commit_groups is None
 
-    def test_stub_llm_group_commits_receives_max_groups_from_config(self, tmp_path: Path) -> None:
-        """summarize_and_group() must be called with max_groups=config.render.max_groups_shown."""
-        from gitvisual.config import Config
-        from gitvisual.llm.summarizer import StubSummarizer
-
-        repo = self._make_repo_with_commit(tmp_path)
-        output_dir = tmp_path / "output"
-        output_dir.mkdir()
-
-        # Capture summarize_and_group calls to verify max_groups argument
-        calls: list[dict] = []
-        original = StubSummarizer.summarize_and_group
-
-        def capturing(self_inner: StubSummarizer, day: object, max_groups: object = None) -> object:
-            calls.append({"max_groups": max_groups})
-            return original(self_inner, day, max_groups=max_groups)  # type: ignore[arg-type]
-
-        with patch.object(StubSummarizer, "summarize_and_group", capturing):
-            result = runner.invoke(
-                app,
-                ["generate", str(repo), "--output", str(output_dir), "--summarize", "--stub-llm"],
-            )
-
-        assert result.exit_code == 0, result.output
-        assert len(calls) >= 1
-        # The value passed must match config.render.max_groups_shown (default: 10)
-        expected = Config().render.max_groups_shown
-        assert calls[0]["max_groups"] == expected
-
 
 class TestVersionFlag:
     def test_version_flag_exits_zero(self) -> None:

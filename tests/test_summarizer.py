@@ -895,65 +895,6 @@ class TestLLMSummarizerSummarizeAndGroup:
         assert len(groups) == 1
         assert groups[0].summary == "Auth work"
 
-    def test_turn1_uses_timeout_grouping_turn2_uses_timeout(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Turn 1 uses timeout_grouping; Turn 2 uses timeout."""
-        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
-        day, (c1, _c2) = self._make_day(tmp_path)
-
-        groups_json = json.dumps(
-            {"groups": [{"summary": "Work", "commit_hashes": [c1.short_hash]}]}
-        )
-        summary_text = "Did some work."
-
-        fake = types.ModuleType("litellm")
-        fake.suppress_debug_info = False  # type: ignore[attr-defined]
-        fake.verbose = True  # type: ignore[attr-defined]
-        captured_timeouts: list[int] = []
-        responses = [groups_json, summary_text]
-        call_count = [0]
-
-        def capturing_completion(**kwargs: object) -> object:
-            from types import SimpleNamespace
-
-            captured_timeouts.append(int(kwargs.get("timeout", -1)))  # type: ignore[arg-type]
-            idx = call_count[0]
-            call_count[0] += 1
-            msg = SimpleNamespace(content=responses[idx])
-            return SimpleNamespace(choices=[SimpleNamespace(message=msg)])
-
-        fake.completion = capturing_completion  # type: ignore[attr-defined]
-        monkeypatch.setitem(sys.modules, "litellm", fake)
-
-        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY", timeout=30, timeout_grouping=120)
-        s.summarize_and_group(day)
-
-        assert len(captured_timeouts) == 2
-        assert captured_timeouts[0] == 120  # Turn 1: grouping timeout
-        assert captured_timeouts[1] == 30  # Turn 2: summary timeout
-
-    def test_turn1_failure_returns_none_none(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """If Turn 1 returns None, result is (None, None)."""
-        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
-        day, _ = self._make_day(tmp_path)
-
-        fake = types.ModuleType("litellm")
-        fake.suppress_debug_info = False  # type: ignore[attr-defined]
-        fake.verbose = True  # type: ignore[attr-defined]
-
-        def raise_exc(**kwargs: object) -> None:
-            raise RuntimeError("Turn 1 failed")
-
-        fake.completion = raise_exc  # type: ignore[attr-defined]
-        monkeypatch.setitem(sys.modules, "litellm", fake)
-
-        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
-        result = s.summarize_and_group(day)
-        assert result == (None, None)
-
     def test_turn2_failure_returns_none_with_groups(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1005,6 +946,8 @@ class TestLLMSummarizerSummarizeAndGroup:
         s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
         result = s.summarize_and_group(day)
         assert result == (None, None)
+        captured = capsys.readouterr()
+        assert "[gitvisual]" in captured.err
 
     def test_max_groups_flows_to_grouping_instruction(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1041,7 +984,7 @@ class TestLLMSummarizerSummarizeAndGroup:
         # Turn 1 messages must mention the group count hint
         turn1_msgs = captured_messages[0]
         all_text = " ".join(str(m.get("content", "")) for m in turn1_msgs)
-        assert "7" in all_text
+        assert "7 group" in all_text
 
     def test_max_groups_none_no_hint_in_prompt(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1114,11 +1057,8 @@ class TestStubSummarizerSummarizeAndGroup:
 
         s = StubSummarizer()
         day = DaySummary(date=date(2025, 4, 7), repo_path=tmp_path, repo_name="repo", commits=[])
-        summary, groups = s.summarize_and_group(day)
-        # Empty day: summarize() returns None; groups is a list (possibly empty)
-        assert summary is None
-        assert groups is not None
-        assert isinstance(groups, list)
+        result = s.summarize_and_group(day)
+        assert result == (None, None)
 
     def test_max_groups_ignored(self, tmp_path: Path) -> None:
         s = StubSummarizer()

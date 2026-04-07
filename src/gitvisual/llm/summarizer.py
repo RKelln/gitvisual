@@ -232,7 +232,10 @@ class LLMSummarizer:
             {"role": "user", "content": prompt},
         ]
         content = self._call_llm(
-            messages, self.max_tokens_grouping, response_format={"type": "json_object"}
+            messages,
+            self.max_tokens_grouping,
+            timeout=self.timeout_grouping,
+            response_format={"type": "json_object"},
         )
         if not content:
             return None
@@ -338,12 +341,12 @@ class StubSummarizer:
     def summarize_and_group(
         self, day: DaySummary, max_groups: int | None = None
     ) -> tuple[str | None, list[CommitGroup] | None]:
+        if not day.commits:
+            return (None, None)
         summary = self.summarize(day)
-        groups: list[CommitGroup] = (
-            [CommitGroup(summary="Stub: all commits grouped", commits=list(day.commits))]
-            if day.commits
-            else []
-        )
+        groups: list[CommitGroup] = [
+            CommitGroup(summary="Stub: all commits grouped", commits=list(day.commits))
+        ]
         return (summary, groups)
 
 
