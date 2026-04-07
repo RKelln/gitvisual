@@ -82,10 +82,15 @@ class CardRenderer:
 
         y = pad
 
-        # Repo label
-        y += cfg.small_text_size + _REPO_LABEL_GAP
-        # Date hero
-        y += cfg.title_size + _DATE_GAP
+        # Repo label / hero — behaviour depends on show_date + show_repo_name
+        if cfg.show_repo_name and not cfg.show_date:
+            # Repo name becomes the hero (title size) when date is suppressed
+            y += cfg.title_size + _DATE_GAP
+        else:
+            if cfg.show_repo_name:
+                y += cfg.small_text_size + _REPO_LABEL_GAP
+            if cfg.show_date:
+                y += cfg.title_size + _DATE_GAP
 
         # Summary block
         if day.summary:
@@ -135,14 +140,19 @@ class CardRenderer:
 
         y = pad
 
-        # --- Repo label (small, muted, uppercase) ---
-        draw.text((pad, y), day.repo_name.upper(), font=fnt.small, fill=pal.muted)
-        y += cfg.small_text_size + _REPO_LABEL_GAP
-
-        # --- Date hero ---
-        date_text = day.date.strftime("%-d %B %Y")
-        draw.text((pad, y), date_text, font=fnt.title, fill=pal.heading)
-        y += cfg.title_size + _DATE_GAP
+        # --- Repo label / hero ---
+        if cfg.show_repo_name and not cfg.show_date:
+            # Date suppressed: repo name becomes the title-size hero
+            draw.text((pad, y), day.repo_name.upper(), font=fnt.title, fill=pal.heading)
+            y += cfg.title_size + _DATE_GAP
+        else:
+            if cfg.show_repo_name:
+                draw.text((pad, y), day.repo_name.upper(), font=fnt.small, fill=pal.muted)
+                y += cfg.small_text_size + _REPO_LABEL_GAP
+            if cfg.show_date:
+                date_text = day.date.strftime("%-d %B %Y")
+                draw.text((pad, y), date_text, font=fnt.title, fill=pal.heading)
+                y += cfg.title_size + _DATE_GAP
 
         # --- Summary body ---
         if day.summary:

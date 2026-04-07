@@ -56,6 +56,10 @@ class RenderConfig(BaseModel):
     style: str = "compact"  # "compact" | "detailed"
     max_files_shown: int = 12
 
+    # Header visibility
+    show_date: bool = True  # show the large date hero
+    show_repo_name: bool = True  # show repo name; becomes hero when show_date=False
+
     # Font overrides (None = use bundled fonts)
     font_regular: str | None = None
     font_mono: str | None = None
@@ -145,6 +149,8 @@ padding = 72
 background_opacity = 0.3   # 0.0 = fully transparent, 1.0 = fully opaque
 style = "compact"        # "compact" | "detailed"
 max_files_shown = 12
+show_date = true         # show the large date hero
+show_repo_name = true    # show repo name; becomes hero when show_date = false
 
 [repos]
 scan_dirs = []
