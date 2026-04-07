@@ -39,17 +39,18 @@ class LLMConfig(BaseModel):
 class RenderConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    # Soft 1:1 target; height expands with content
+    # Canvas — width fixed; height expands to fit content
     card_width: int = 1200
-    min_card_height: int = 1200
-    padding: int = 60
-    line_height: int = 28
+    min_card_height: int = 0
+    padding: int = 72
+    background_opacity: float = 0.3  # PNG alpha for background (0.0-1.0)
 
-    # Typography sizes
-    title_size: int = 36
-    heading_size: int = 22
-    text_size: int = 18
-    small_text_size: int = 14
+    # Typography — see DESIGN.md for rationale
+    title_size: int = 88  # date hero
+    heading_size: int = 22  # commit messages + stats bar
+    text_size: int = 28  # summary body
+    small_text_size: int = 16  # repo label, commit meta, file paths
+    line_height: int = 44  # summary text line height only
 
     # Compact vs detailed
     style: str = "compact"  # "compact" | "detailed"
@@ -139,8 +140,9 @@ timeout = 30
 
 [render]
 card_width = 1200
-min_card_height = 1200
-padding = 60
+min_card_height = 0
+padding = 72
+background_opacity = 0.3   # 0.0 = fully transparent, 1.0 = fully opaque
 style = "compact"        # "compact" | "detailed"
 max_files_shown = 12
 
