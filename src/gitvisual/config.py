@@ -29,7 +29,7 @@ class LLMConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     provider: str = "openrouter"
-    model: str = "anthropic/claude-3-haiku"
+    model: str = "openrouter/anthropic/claude-3-haiku"
     api_key_env: str = "OPENROUTER_API_KEY"
     api_base: str | None = None
     max_tokens: int = 200
@@ -132,8 +132,8 @@ summarize = false
 
 [llm]
 provider = "openrouter"
-model = "anthropic/claude-3-haiku"
-api_key_env = "OPENROUTER_API_KEY"
+model = "openrouter/anthropic/claude-3-haiku"   # prefix tells litellm which provider to use
+api_key_env = "OPENROUTER_API_KEY"               # name of the env var holding your key
 max_tokens = 200
 timeout = 30
 

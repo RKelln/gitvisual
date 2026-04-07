@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from gitvisual.cli import app
@@ -396,3 +398,87 @@ name = "light"
 
         assert result.exit_code == 0
         assert "defaults" in result.stdout.lower() or "llm" in result.stdout.lower()
+
+
+class TestGenerateLLMSummary:
+    """Tests for --summarize / LLM integration in the generate command."""
+
+    def _make_repo_with_commit(self, tmp_path: Path) -> Path:
+        repo = tmp_path / "testrepo"
+        init_git_repo(repo)
+        make_commit_in_repo(
+            repo,
+            files={"main.py": "x = 1"},
+            message="feat: add feature",
+            author_date=f"{date.today().isoformat()}T12:00:00+00:00",
+        )
+        return repo
+
+    def test_warns_when_api_key_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--summarize without API key env var set shows a pre-flight warning."""
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        repo = self._make_repo_with_commit(tmp_path)
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        # Suppress load_dotenv so monkeypatch.delenv isn't overridden by .env file
+        with patch("dotenv.load_dotenv"):
+            result = runner.invoke(
+                app,
+                ["generate", str(repo), "--output", str(output_dir), "--summarize"],
+            )
+
+        assert result.exit_code == 0
+        assert "OPENROUTER_API_KEY" in result.output
+        assert "not set" in result.output.lower() or "warning" in result.output.lower()
+
+    def test_post_warning_when_llm_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Post-generate warning shown when --summarize is set but LLM returns None."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        repo = self._make_repo_with_commit(tmp_path)
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        with (
+            patch("dotenv.load_dotenv"),
+            patch("litellm.completion", side_effect=Exception("connection error")),
+        ):
+            result = runner.invoke(
+                app,
+                ["generate", str(repo), "--output", str(output_dir), "--summarize"],
+            )
+
+        assert result.exit_code == 0
+        # Card still generated even when LLM fails
+        cards = list(output_dir.glob("*.png"))
+        assert len(cards) == 1
+        # Post-generate hint shown
+        assert "no llm summaries" in result.output.lower() or "not set" in result.output.lower()
+
+    def test_summary_included_when_llm_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When LLM returns a summary, card is generated and no warning is shown."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        repo = self._make_repo_with_commit(tmp_path)
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = "Built a new feature for the project."
+
+        with patch("dotenv.load_dotenv"), patch("litellm.completion", return_value=mock_response):
+            result = runner.invoke(
+                app,
+                ["generate", str(repo), "--output", str(output_dir), "--summarize"],
+            )
+
+        assert result.exit_code == 0
+        cards = list(output_dir.glob("*.png"))
+        assert len(cards) == 1
+        # No post-generate failure warning
+        assert "no llm summaries" not in result.output.lower()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Annotated
@@ -151,6 +152,15 @@ def generate(
         )
 
     renderer = _make_renderer(config)
+
+    # Load .env file early so our pre-flight check and the summarizer see the same env
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+    except ImportError:
+        pass
+
     summarizer = make_summarizer(
         enabled=summarize,
         model=config.llm.model,
@@ -161,8 +171,21 @@ def generate(
         stub=stub_llm,
     )
 
+    # Pre-flight: warn if --summarize requested but API key is missing
+    if summarize and not stub_llm:
+        key_var = config.llm.api_key_env
+        if not os.environ.get(key_var):
+            console.print(
+                f"[yellow]Warning:[/yellow] --summarize requested but ${key_var} is not set. "
+                f"Summaries will be skipped.\n"
+                f"  Set it with: export {key_var}=<your-key>\n"
+                f"  Model: {config.llm.model}\n"
+                f"  Run [bold]gitvisual config show[/bold] to review LLM settings."
+            )
+
     current = d_from
     total_cards = 0
+    total_summaries = 0
     from datetime import timedelta as td
 
     while current <= d_to:
@@ -181,6 +204,7 @@ def generate(
                     summary = summarizer.summarize(day)
                     if summary:
                         day = day.model_copy(update={"summary": summary})
+                        total_summaries += 1
 
                 card_path = _output_path(out_dir, day.repo_name, current)
                 renderer.render_to_file(day, card_path)
@@ -198,6 +222,14 @@ def generate(
 
     if total_cards == 0:
         console.print("[dim]No cards generated.[/dim]")
+
+    if summarize and not stub_llm and total_cards > 0 and total_summaries == 0:
+        console.print(
+            "\n[yellow]No LLM summaries were generated.[/yellow] "
+            f"Check that ${config.llm.api_key_env} is set and the model "
+            f"[bold]{config.llm.model}[/bold] is reachable.\n"
+            "  Run [bold]gitvisual config show[/bold] to review LLM settings."
+        )
 
 
 # ---------------------------------------------------------------------------
