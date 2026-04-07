@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.1.2] — Two-turn LLM session and --version flag — 2026-04-07
+
+LLM summarization now uses a single two-turn conversation: commits are sent
+once in the grouping turn, and the summary turn reuses the message history.
+This eliminates redundant token transmission and resolves timeout failures
+on large commit sets (e.g. 57+ commits).
+
+### Added
+- `gitvisual --version` flag prints the installed package version and exits.
+- `summarize_and_group()` method on all summarizer types (`LLMSummarizer`,
+  `StubSummarizer`, `NullSummarizer`) and the `Summarizer` protocol. The CLI
+  `generate` command now calls this single method instead of two sequential calls.
+- `timeout_grouping` config field (default 120 s) in `[llm]` — separate timeout
+  for the grouping turn, independent of the existing `timeout` (30 s) used for
+  the summary turn. Configurable in `~/.config/gitvisual/config.toml`.
+
+### Fixed
+- `group_commits()` was incorrectly using the 30 s summary timeout for the
+  heavier grouping LLM call. It now uses `timeout_grouping` (120 s).
+- LLM call failures now print a `[gitvisual]` prefixed error to stderr instead
+  of failing silently.
+- JSON group parse failures now log to stderr instead of failing silently.
+
+### Infrastructure
+- README install instructions corrected (repo URL and `uv tool upgrade` command).
+
+---
+
 ## [v0.1.1] — Initial release: LLM-powered git activity cards — 2026-04-07
 
 `gitvisual` generates clean, dark-themed PNG cards from git commit history —
