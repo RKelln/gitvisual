@@ -206,12 +206,12 @@ Present the reflection report to the user. **STOP HERE.** Wait for acknowledgmen
 
 3. **Merge** -- Only after explicit user approval:
 ```bash
-# Rebase onto main
-git checkout main && git checkout - && git rebase main
-scripts/agent-run.sh make ci    # re-verify after rebase
+# Ensure we're on main and have latest
+git checkout main
+git pull --rebase  # if remote exists, otherwise skip
 
-# Merge
-git checkout main && git merge --no-ff <branch-name> \
+# Merge feature branch (faster-forward if possible, otherwise --no-ff)
+git merge --no-ff <branch-name> \
   -m "Merge branch '<branch-name>'" \
   -m "<Detailed summary of changes and resolved beads>"
 
