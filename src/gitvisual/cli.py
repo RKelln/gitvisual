@@ -270,6 +270,18 @@ def discover(
         Path | None,
         typer.Option("--output", "-o", help="Output directory for generated cards."),
     ] = None,
+    summarize: Annotated[
+        bool,
+        typer.Option("--summarize/--no-summary", help="Enable LLM summary generation."),
+    ] = False,
+    model: Annotated[
+        str | None,
+        typer.Option("--model", "-m", help="LLM model override."),
+    ] = None,
+    max_tokens: Annotated[
+        int | None,
+        typer.Option("--max-tokens", help="Override max_tokens for LLM calls."),
+    ] = None,
     config_path: Annotated[
         Path | None,
         typer.Option("--config", help="Path to config.toml"),
@@ -323,10 +335,12 @@ def discover(
             date_to=None,
             last_week=False,
             output=output,
-            summarize=config.defaults.summarize,
+            summarize=summarize,
             style=None,
             config_path=config_path,
             stub_llm=False,
+            model=model,
+            max_tokens=max_tokens,
         )
 
 
