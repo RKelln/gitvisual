@@ -40,6 +40,7 @@ class LLMSummarizer:
         max_tokens_grouping: int = 4096,
         timeout: int = 30,
         timeout_grouping: int = 120,
+        debug: bool = False,
     ) -> None:
         self.model = model
         self.api_key_env = api_key_env
@@ -48,6 +49,12 @@ class LLMSummarizer:
         self.max_tokens_grouping = max_tokens_grouping
         self.timeout = timeout
         self.timeout_grouping = timeout_grouping
+        self.debug = debug
+
+    def _dbg(self, *parts: str) -> None:
+        """Print a debug line to stderr (only when debug=True)."""
+        if self.debug:
+            print("[debug]", *parts, file=sys.stderr)  # noqa: T201
 
     def _format_commits_for_prompt(self, day: DaySummary) -> str:
         """Return a formatted multi-line string of commits for use in prompts."""
@@ -134,8 +141,23 @@ class LLMSummarizer:
                 kwargs["api_key"] = api_key
             kwargs.update(extra_kwargs)
 
+            effective_timeout = kwargs.get("timeout", self.timeout)
+            # Rough token estimate: 1 token ≈ 4 chars
+            input_chars = sum(len(m.get("content", "")) for m in messages)
+            input_tokens_est = input_chars // 4
+            self._dbg(
+                f"{len(messages)} message(s), ~{input_tokens_est} tokens input,"
+                f" max_tokens={max_tokens}, timeout={effective_timeout}s,"
+                f" model={self.model}"
+            )
+
             response = litellm.completion(**kwargs)
             content = response.choices[0].message.content
+            if content:
+                preview = content[:80].replace("\n", " ")
+                self._dbg(f"  → {len(content)} chars: {preview!r}")
+            else:
+                self._dbg("  → (empty response)")
             return content if content else None
         except Exception as e:
             print(f"[gitvisual] LLM call failed: {e}", file=sys.stderr)  # noqa: T201
@@ -263,6 +285,7 @@ class LLMSummarizer:
         grouping_q = self._grouping_question(max_groups)
 
         # Turn 1: commits + grouping question
+        self._dbg(f"Turn 1 — grouping  {len(day.commits)} commit(s)")
         messages: list[dict[str, str]] = [
             system_msg,
             {"role": "user", "content": context + "\n\n" + grouping_q},
@@ -275,18 +298,23 @@ class LLMSummarizer:
         )
 
         if group_raw is None:
+            self._dbg("  → Turn 1 failed (no response)")
             return (None, None)
 
         groups = self._parse_groups(group_raw, day)
         if groups is None:
-            # JSON parse failed — abort the session
+            self._dbg("  → Turn 1 parse failed — aborting session")
             return (None, None)
 
+        self._dbg(f"  → {len(groups)} group(s) parsed")
+
         # Turn 2: append assistant reply + summary question (no commits repeated)
+        self._dbg("Turn 2 — summary")
         messages.append({"role": "assistant", "content": group_raw})
         messages.append({"role": "user", "content": self._summarize_question()})
         summary_raw = self._call_llm(messages, self.max_tokens, timeout=self.timeout)
         summary = _clean_summary(summary_raw) if summary_raw else None
+        self._dbg(f"  → summary: {summary!r}")
 
         return (summary, groups)
 
@@ -378,6 +406,7 @@ def make_summarizer(
     timeout: int = 30,
     timeout_grouping: int = 120,
     stub: bool = False,
+    debug: bool = False,
 ) -> Summarizer:
     """Factory: return the appropriate summarizer based on settings."""
     if not enabled:
@@ -392,4 +421,5 @@ def make_summarizer(
         max_tokens_grouping=max_tokens_grouping,
         timeout=timeout,
         timeout_grouping=timeout_grouping,
+        debug=debug,
     )

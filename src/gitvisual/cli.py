@@ -163,6 +163,10 @@ def generate(
         int | None,
         typer.Option("--max-tokens", help="Override max_tokens for LLM calls."),
     ] = None,
+    debug_llm: Annotated[
+        bool,
+        typer.Option("--debug", "-D", help="Print LLM prompt/response debug info to stderr."),
+    ] = False,
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Output results as JSON to stdout (for scripts/agents)."),
@@ -249,6 +253,7 @@ def generate(
         timeout=config.llm.timeout,
         timeout_grouping=config.llm.timeout_grouping,
         stub=stub_llm,
+        debug=debug_llm,
     )
 
     # Pre-flight: warn if --summarize requested but API key is missing
