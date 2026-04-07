@@ -11,7 +11,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from gitvisual.config import RenderConfig
-from gitvisual.git.models import Commit, DaySummary
+from gitvisual.git.models import Commit, CommitGroup, DaySummary
 from gitvisual.render.components import (
     draw_horizontal_rule,
     load_font,
@@ -105,6 +105,18 @@ class CardRenderer:
 
         if day.is_empty:
             y += cfg.text_size + 8
+        elif day.commit_groups is not None:
+            groups_to_show = day.commit_groups[: cfg.max_groups_shown]
+            for i, group in enumerate(groups_to_show):
+                msg_lh = cfg.heading_size + 4
+                msg_lines = wrap_text(group.summary, fnt.heading, inner_w)
+                y += max(len(msg_lines), 1) * msg_lh + _COMMIT_MSG_EXTRA
+                y += cfg.small_text_size + 8  # meta line
+                if i < len(groups_to_show) - 1:
+                    y += _COMMIT_GAP
+            overflow = len(day.commit_groups) - cfg.max_groups_shown
+            if overflow > 0:
+                y += cfg.small_text_size + 4
         else:
             for i, commit in enumerate(day.commits):
                 meta_h = cfg.small_text_size + 8
@@ -186,6 +198,21 @@ class CardRenderer:
         # --- Commits ---
         if day.is_empty:
             draw.text((pad, y), "No commits on this date.", font=fnt.text, fill=pal.muted)
+        elif day.commit_groups is not None:
+            groups_to_show = day.commit_groups[: cfg.max_groups_shown]
+            for i, group in enumerate(groups_to_show):
+                y = self._draw_commit_group(draw, group, fnt, y)
+                if i < len(groups_to_show) - 1:
+                    y += _COMMIT_GAP
+            overflow = len(day.commit_groups) - cfg.max_groups_shown
+            if overflow > 0:
+                draw.text(
+                    (pad, y),
+                    f"…and {overflow} more group{'s' if overflow != 1 else ''}",
+                    font=fnt.small,
+                    fill=pal.muted,
+                )
+                y += cfg.small_text_size + 4
         else:
             for i, commit in enumerate(day.commits):
                 y = self._draw_commit(draw, commit, fnt, y)
@@ -251,6 +278,47 @@ class CardRenderer:
                     fill=pal.muted,
                 )
                 y += cfg.small_text_size + 4
+
+        return y
+
+    def _draw_commit_group(
+        self,
+        draw: ImageDraw.ImageDraw,
+        group: CommitGroup,
+        fnt: FontSet,
+        y: int,
+    ) -> int:
+        cfg = self.config
+        pal = self.palette
+        pad = cfg.padding
+        inner_w = cfg.card_width - 2 * pad
+        msg_lh = cfg.heading_size + 4
+
+        # --- Summary line (bold, same position as commit message) ---
+        for line in wrap_text(group.summary, fnt.heading, inner_w):
+            draw.text((pad, y), line, font=fnt.heading, fill=pal.text)
+            y += msg_lh
+        y += _COMMIT_MSG_EXTRA
+
+        # --- Meta line: +ins  -del · N file(s) · M commit(s) ---
+        n = len(group.commits)
+        x = pad
+        parts: list[tuple[str, tuple[int, int, int, int]]] = [
+            (f"+{group.total_insertions}", pal.added),
+            ("  ", pal.muted),
+            (f"-{group.total_deletions}", pal.removed),
+            ("  ·  ", pal.muted),
+            (
+                f"{group.total_files_changed} file{'s' if group.total_files_changed != 1 else ''}",
+                pal.muted,
+            ),
+            ("  ·  ", pal.muted),
+            (f"{n} commit{'s' if n != 1 else ''}", pal.muted),
+        ]
+        for part_text, color in parts:
+            draw.text((x, y), part_text, font=fnt.small, fill=color)
+            x += text_width(part_text, fnt.small)
+        y += cfg.small_text_size + 8
 
         return y
 

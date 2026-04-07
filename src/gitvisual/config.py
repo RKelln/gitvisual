@@ -33,6 +33,7 @@ class LLMConfig(BaseModel):
     api_key_env: str = "OPENROUTER_API_KEY"
     api_base: str | None = None
     max_tokens: int = 1500
+    max_tokens_grouping: int = 4096
     timeout: int = 30
 
 
@@ -55,6 +56,7 @@ class RenderConfig(BaseModel):
     # Compact vs detailed
     style: str = "compact"  # "compact" | "detailed"
     max_files_shown: int = 12
+    max_groups_shown: int = 10
 
     # Header visibility
     show_date: bool = True  # show the large date hero
@@ -140,6 +142,7 @@ provider = "openrouter"
 model = "openrouter/nvidia/nemotron-3-super-120b-a12b:free"  # prefix tells litellm which provider to use
 api_key_env = "OPENROUTER_API_KEY"               # name of the env var holding your key
 max_tokens = 1500  # thinking models consume tokens on reasoning before output; needs room
+max_tokens_grouping = 4096  # grouping returns structured JSON — needs more room than narrative summary
 timeout = 30
 
 [render]
@@ -149,6 +152,7 @@ padding = 72
 background_opacity = 0.3   # 0.0 = fully transparent, 1.0 = fully opaque
 style = "compact"        # "compact" | "detailed"
 max_files_shown = 12
+max_groups_shown = 10    # max commit groups shown; excess rendered as "…and N more groups"
 show_date = true         # show the large date hero
 show_repo_name = true    # show repo name; becomes hero when show_date = false
 

@@ -224,6 +224,7 @@ def generate(
         api_key_env=config.llm.api_key_env,
         api_base=config.llm.api_base,
         max_tokens=max_tokens if max_tokens is not None else config.llm.max_tokens,
+        max_tokens_grouping=config.llm.max_tokens_grouping,
         timeout=config.llm.timeout,
         stub=stub_llm,
     )
@@ -264,6 +265,9 @@ def generate(
                     if summary:
                         day = day.model_copy(update={"summary": summary})
                         total_summaries += 1
+                    groups = summarizer.group_commits(day)
+                    if groups is not None:
+                        day = day.model_copy(update={"commit_groups": groups})
 
                 card_path = _output_path(out_dir, day.repo_name, current)
                 renderer.render_to_file(day, card_path)

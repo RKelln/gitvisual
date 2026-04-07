@@ -553,7 +553,7 @@ class TestGenerateLLMSummary:
     def test_max_tokens_flag_overrides_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """--max-tokens flag overrides max_tokens from config."""
+        """--max-tokens flag overrides max_tokens for the summarize LLM call."""
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
         repo = self._make_repo_with_commit(tmp_path)
         output_dir = tmp_path / "output"
@@ -561,10 +561,11 @@ class TestGenerateLLMSummary:
 
         mock_response = MagicMock()
         mock_response.choices[0].message.content = "Did some work."
-        captured: dict[str, object] = {}
+        # Capture all calls (summarize + group_commits both call litellm)
+        all_calls: list[dict[str, object]] = []
 
         def capture_completion(**kwargs: object) -> MagicMock:
-            captured.update(kwargs)
+            all_calls.append(dict(kwargs))
             return mock_response
 
         with (
@@ -585,4 +586,78 @@ class TestGenerateLLMSummary:
             )
 
         assert result.exit_code == 0
-        assert captured.get("max_tokens") == 42
+        # The first LLM call is summarize — must use the overridden max_tokens=42
+        assert len(all_calls) >= 1
+        assert all_calls[0].get("max_tokens") == 42
+
+
+class TestGenerateGroupCommits:
+    """Tests for commit grouping wired into the generate command."""
+
+    def _make_repo_with_commit(self, tmp_path: Path) -> Path:
+        repo = tmp_path / "testrepo"
+        init_git_repo(repo)
+        make_commit_in_repo(
+            repo,
+            files={"main.py": "x = 1"},
+            message="feat: add feature",
+            author_date=f"{date.today().isoformat()}T12:00:00+00:00",
+        )
+        return repo
+
+    def test_stub_llm_sets_commit_groups(self, tmp_path: Path) -> None:
+        """--summarize --stub-llm → DaySummary rendered has commit_groups set."""
+        from gitvisual.git.models import CommitGroup
+        from gitvisual.render.card import CardRenderer
+
+        repo = self._make_repo_with_commit(tmp_path)
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        rendered_days: list = []
+
+        original_render = CardRenderer.render_to_file
+
+        def capturing_render(self_inner: CardRenderer, day: object, output_path: object) -> object:
+            rendered_days.append(day)
+            return original_render(self_inner, day, output_path)  # type: ignore[arg-type]
+
+        with patch.object(CardRenderer, "render_to_file", capturing_render):
+            result = runner.invoke(
+                app,
+                ["generate", str(repo), "--output", str(output_dir), "--summarize", "--stub-llm"],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert len(rendered_days) == 1
+        day = rendered_days[0]
+        assert day.commit_groups is not None
+        assert len(day.commit_groups) >= 1
+        assert all(isinstance(g, CommitGroup) for g in day.commit_groups)
+
+    def test_no_summary_commit_groups_remain_none(self, tmp_path: Path) -> None:
+        """--no-summary (default) → commit_groups stays None on rendered day."""
+        from gitvisual.render.card import CardRenderer
+
+        repo = self._make_repo_with_commit(tmp_path)
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        rendered_days: list = []
+
+        original_render = CardRenderer.render_to_file
+
+        def capturing_render(self_inner: CardRenderer, day: object, output_path: object) -> object:
+            rendered_days.append(day)
+            return original_render(self_inner, day, output_path)  # type: ignore[arg-type]
+
+        with patch.object(CardRenderer, "render_to_file", capturing_render):
+            result = runner.invoke(
+                app,
+                ["generate", str(repo), "--output", str(output_dir), "--no-summary"],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert len(rendered_days) == 1
+        day = rendered_days[0]
+        assert day.commit_groups is None

@@ -574,3 +574,45 @@ class TestLLMSummarizerGroupCommits:
         s.group_commits(day)
 
         assert captured.get("response_format") == {"type": "json_object"}
+
+    def test_group_commits_uses_max_tokens_grouping_not_max_tokens(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """group_commits() must use max_tokens_grouping, not max_tokens."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, commits = self._make_day(tmp_path)
+        captured: dict = {}
+
+        def capturing_completion(**kwargs: object) -> object:
+            from types import SimpleNamespace
+
+            captured.update(kwargs)
+            content = json.dumps(
+                {
+                    "groups": [
+                        {
+                            "summary": "g",
+                            "commit_hashes": [c.short_hash for c in commits],
+                        }
+                    ]
+                }
+            )
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+            )
+
+        fake = types.ModuleType("litellm")
+        fake.suppress_debug_info = False  # type: ignore[attr-defined]
+        fake.verbose = True  # type: ignore[attr-defined]
+        fake.completion = capturing_completion  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+
+        # Deliberately set max_tokens and max_tokens_grouping to different values
+        s = LLMSummarizer(
+            api_key_env="OPENROUTER_API_KEY", max_tokens=100, max_tokens_grouping=4096
+        )
+        s.group_commits(day)
+
+        # Must use max_tokens_grouping (4096), not max_tokens (100)
+        assert captured.get("max_tokens") == 4096
+        assert captured.get("max_tokens") != 100

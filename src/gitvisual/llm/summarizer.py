@@ -32,12 +32,14 @@ class LLMSummarizer:
         api_key_env: str = "OPENROUTER_API_KEY",
         api_base: str | None = None,
         max_tokens: int = 1500,
+        max_tokens_grouping: int = 4096,
         timeout: int = 30,
     ) -> None:
         self.model = model
         self.api_key_env = api_key_env
         self.api_base = api_base
         self.max_tokens = max_tokens
+        self.max_tokens_grouping = max_tokens_grouping
         self.timeout = timeout
 
     def _build_prompt(self, day: DaySummary) -> str:
@@ -167,7 +169,7 @@ class LLMSummarizer:
                     {"role": "system", "content": system},
                     {"role": "user", "content": prompt},
                 ],
-                "max_tokens": self.max_tokens,
+                "max_tokens": self.max_tokens_grouping,
                 "timeout": self.timeout,
                 "response_format": {"type": "json_object"},
                 "extra_body": {"reasoning": {"exclude": True}},
@@ -283,6 +285,7 @@ def make_summarizer(
     api_key_env: str,
     api_base: str | None = None,
     max_tokens: int = 200,
+    max_tokens_grouping: int = 4096,
     timeout: int = 30,
     stub: bool = False,
 ) -> Summarizer:
@@ -296,5 +299,6 @@ def make_summarizer(
         api_key_env=api_key_env,
         api_base=api_base,
         max_tokens=max_tokens,
+        max_tokens_grouping=max_tokens_grouping,
         timeout=timeout,
     )
