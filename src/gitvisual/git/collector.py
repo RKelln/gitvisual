@@ -230,13 +230,23 @@ def collect_range(repo_path: Path, date_from: date, date_to: date) -> list[DaySu
     return days
 
 
-def discover_repos(search_path: Path) -> list[Path]:
+def discover_repos(search_path: Path, exclude: list[str] | None = None) -> list[Path]:
     """Walk search_path and return all git repository root directories found."""
     repos: list[Path] = []
     search_path = search_path.resolve()
+    exclude = exclude if exclude is not None else []
 
     for candidate in search_path.rglob(".git"):
         if candidate.is_dir():
-            repos.append(candidate.parent)
+            repo_root = candidate.parent
+            if _should_exclude(repo_root, exclude):
+                continue
+            repos.append(repo_root)
 
     return sorted(repos)
+
+
+def _should_exclude(repo_path: Path, exclude: list[str]) -> bool:
+    """Check if any path component matches an exclude pattern."""
+    parts = repo_path.parts
+    return any(pattern in parts for pattern in exclude)

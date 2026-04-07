@@ -226,3 +226,48 @@ class TestDiscoverRepos:
         empty = tmp_path / "empty"
         empty.mkdir()
         assert discover_repos(empty) == []
+
+    def test_exclude_filters_node_modules(self, tmp_path: Path) -> None:
+        normal = tmp_path / "myproject"
+        inside_node_modules = tmp_path / "node_modules" / "some-lib"
+        init_git_repo(normal)
+        init_git_repo(inside_node_modules)
+        found = discover_repos(tmp_path, exclude=["node_modules"])
+        assert normal in found
+        assert inside_node_modules not in found
+
+    def test_exclude_filters_nested_paths(self, tmp_path: Path) -> None:
+        r1 = tmp_path / "a" / "project"
+        r2 = tmp_path / "x" / "vendor" / "project"
+        r3 = tmp_path / "y" / "z" / "project"
+        init_git_repo(r1)
+        init_git_repo(r2)
+        init_git_repo(r3)
+        found = discover_repos(tmp_path, exclude=["vendor"])
+        assert r1 in found
+        assert r2 not in found
+        assert r3 in found
+
+    def test_exclude_empty_list_includes_all(self, tmp_path: Path) -> None:
+        r1 = tmp_path / "project-a"
+        r2 = tmp_path / "sub" / "project-b"
+        init_git_repo(r1)
+        init_git_repo(r2)
+        found = discover_repos(tmp_path, exclude=[])
+        assert r1 in found
+        assert r2 in found
+
+    def test_exclude_multiple_patterns(self, tmp_path: Path) -> None:
+        r1 = tmp_path / "project"
+        r2 = tmp_path / "node_modules" / "pkg"
+        r3 = tmp_path / "vendor" / "lib"
+        r4 = tmp_path / "cache" / "app"
+        init_git_repo(r1)
+        init_git_repo(r2)
+        init_git_repo(r3)
+        init_git_repo(r4)
+        found = discover_repos(tmp_path, exclude=["node_modules", "vendor", "cache"])
+        assert r1 in found
+        assert r2 not in found
+        assert r3 not in found
+        assert r4 not in found

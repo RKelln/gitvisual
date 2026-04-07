@@ -244,7 +244,7 @@ def discover(
         target = today
 
     search_path = search_path.expanduser().resolve()
-    repos = discover_repos(search_path)
+    repos = discover_repos(search_path, exclude=config.repos.exclude)
 
     if not repos:
         console.print(f"[yellow]No git repositories found under {search_path}[/yellow]")
