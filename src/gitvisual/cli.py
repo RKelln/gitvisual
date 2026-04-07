@@ -339,12 +339,23 @@ def generate(
         console.print("[dim]No cards generated.[/dim]")
 
     if summarize and not stub_llm and total_cards > 0 and total_summaries == 0:
-        console.print(
-            "\n[yellow]No LLM summaries were generated.[/yellow] "
-            f"Check that ${config.llm.api_key_env} is set and the model "
-            f"[bold]{config.llm.model}[/bold] is reachable.\n"
-            "  Run [bold]gitvisual config show[/bold] to review LLM settings."
-        )
+        key_var = config.llm.api_key_env
+        if not os.environ.get(key_var):
+            console.print(
+                f"\n[yellow]No LLM summaries were generated.[/yellow] "
+                f"${key_var} is not set.\n"
+                f"  Set it with: export {key_var}=<your-key>\n"
+                f"  Run [bold]gitvisual config show[/bold] to review LLM settings."
+            )
+        else:
+            console.print(
+                f"\n[yellow]No LLM summaries were generated.[/yellow] "
+                f"The LLM was reached but all calls failed (check stderr for details).\n"
+                f"  Model: [bold]{config.llm.model}[/bold]\n"
+                f"  Tip: for large commit sets, increase [bold]max_tokens_grouping[/bold] "
+                f"in [bold]~/.config/gitvisual/config.toml[/bold] (current: {config.llm.max_tokens_grouping}).\n"
+                f"  Run [bold]gitvisual config show[/bold] to review LLM settings."
+            )
 
 
 # ---------------------------------------------------------------------------
