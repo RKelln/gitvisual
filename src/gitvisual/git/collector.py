@@ -249,4 +249,4 @@ def discover_repos(search_path: Path, exclude: list[str] | None = None) -> list[
 def _should_exclude(repo_path: Path, exclude: list[str]) -> bool:
     """Check if any path component matches an exclude pattern."""
     parts = repo_path.parts
-    return any(pattern in parts for pattern in exclude)
+    return any(pattern == part for pattern in exclude for part in parts)
