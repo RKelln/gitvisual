@@ -161,7 +161,16 @@ def generate(
     ] = None,
     max_tokens: Annotated[
         int | None,
-        typer.Option("--max-tokens", help="Override max_tokens for LLM calls."),
+        typer.Option(
+            "--max-tokens", help="Override max_tokens for LLM summary calls. 0 = no limit."
+        ),
+    ] = None,
+    max_tokens_grouping: Annotated[
+        int | None,
+        typer.Option(
+            "--max-tokens-grouping",
+            help="Override max_tokens for LLM grouping calls. 0 = no limit.",
+        ),
     ] = None,
     debug_llm: Annotated[
         bool,
@@ -250,7 +259,11 @@ def generate(
         api_key_env=config.llm.api_key_env,
         api_base=config.llm.api_base,
         max_tokens=max_tokens if max_tokens is not None else config.llm.max_tokens,
-        max_tokens_grouping=config.llm.max_tokens_grouping,
+        max_tokens_grouping=(
+            max_tokens_grouping
+            if max_tokens_grouping is not None
+            else config.llm.max_tokens_grouping
+        ),
         timeout=config.llm.timeout,
         timeout_grouping=config.llm.timeout_grouping,
         stub=stub_llm,
@@ -366,11 +379,17 @@ def generate(
                 f"The LLM was reached but all calls failed (check stderr for details).\n"
                 f"  Model: [bold]{effective_model}[/bold]\n"
             )
-            if config.llm.max_tokens_grouping < 2048:
+            effective_grouping_limit = (
+                max_tokens_grouping
+                if max_tokens_grouping is not None
+                else config.llm.max_tokens_grouping
+            )
+            if effective_grouping_limit is not None and 0 < effective_grouping_limit < 2048:
                 msg += (
                     f"  Tip: for large commit sets, increase [bold]max_tokens_grouping[/bold] "
-                    f"in [bold]~/.config/gitvisual/config.toml[/bold] "
-                    f"(current: {config.llm.max_tokens_grouping}).\n"
+                    f"in [bold]~/.config/gitvisual/config.toml[/bold] or use "
+                    f"[bold]--max-tokens-grouping 0[/bold] to remove the limit "
+                    f"(current: {effective_grouping_limit}).\n"
                 )
             else:
                 msg += (
