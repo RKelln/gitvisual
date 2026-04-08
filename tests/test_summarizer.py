@@ -494,15 +494,15 @@ class TestLLMSummarizerGroupCommits:
         all_text = " ".join(str(m.get("content", "")) for m in messages)  # type: ignore[union-attr]
         assert "4" in all_text
 
-    # --- partial assignment → catch-all ---
+    # --- partial assignment → per-commit fallback groups ---
 
-    def test_partial_assignment_creates_catchall(
+    def test_partial_assignment_creates_per_commit_groups(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
         day, (_c1, c2, c3) = self._make_day(tmp_path)
 
-        # LLM only assigns c1 — c2 and c3 should land in "Other changes"
+        # LLM only assigns c1 — c2 and c3 should each get their own group
         response = json.dumps(
             {
                 "groups": [
@@ -516,20 +516,26 @@ class TestLLMSummarizerGroupCommits:
         result = s.group_commits(day)
 
         assert result is not None
-        summaries = {g.summary for g in result}
-        assert "Other changes" in summaries
-        catchall = next(g for g in result if g.summary == "Other changes")
-        assert sorted(catchall.commits, key=lambda c: c.hash) == sorted(
+        # "Other changes" bucket must NOT exist
+        summaries = [g.summary for g in result]
+        assert "Other changes" not in summaries
+        # c2 and c3 each get their own singleton group
+        assert len(result) == 3  # Login feature + c2 solo + c3 solo
+        unassigned_groups = [g for g in result if g.summary != "Login feature"]
+        unassigned_commits = [g.commits[0] for g in unassigned_groups]
+        assert sorted(unassigned_commits, key=lambda c: c.hash) == sorted(
             [c2, c3], key=lambda c: c.hash
         )
+        for g in unassigned_groups:
+            assert len(g.commits) == 1
 
-    def test_all_unassigned_creates_single_catchall(
+    def test_all_unassigned_creates_per_commit_groups(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
         day, commits = self._make_day(tmp_path)
 
-        # LLM returns empty groups list
+        # LLM returns empty groups list — every commit gets its own group
         response = json.dumps({"groups": []})
         monkeypatch.setitem(sys.modules, "litellm", _make_fake_litellm(response))
 
@@ -537,11 +543,29 @@ class TestLLMSummarizerGroupCommits:
         result = s.group_commits(day)
 
         assert result is not None
-        assert len(result) == 1
-        assert result[0].summary == "Other changes"
-        assert sorted(result[0].commits, key=lambda c: c.hash) == sorted(
-            commits, key=lambda c: c.hash
-        )
+        assert len(result) == len(commits)
+        assert "Other changes" not in {g.summary for g in result}
+        for g in result:
+            assert len(g.commits) == 1
+        result_commits = [g.commits[0] for g in result]
+        assert sorted(result_commits, key=lambda c: c.hash) == sorted(commits, key=lambda c: c.hash)
+
+    def test_unassigned_group_uses_commit_message_as_summary(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Each fallback group's summary is the commit message of its commit."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        c1 = make_commit(hash="aabbccdd11223344", message="feat: add login")
+        day = make_day_summary(commits=[c1], tmp_path=tmp_path)
+
+        response = json.dumps({"groups": []})
+        monkeypatch.setitem(sys.modules, "litellm", _make_fake_litellm(response))
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        result = s.group_commits(day)
+
+        assert result is not None
+        assert result[0].summary == "feat: add login"
 
     # --- unrecognised index silently ignored ---
 

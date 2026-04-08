@@ -88,7 +88,7 @@ class LLMSummarizer:
             f"Group the commits above into logical clusters.{hint}\n"
             "Return JSON with this exact schema:\n"
             '{"groups": [{"summary": "plain-language label", "commit_indices": [0, 3, 7]}, ...]}\n'
-            "Use the integer indices shown above. Each commit may appear in at most one group."
+            "Use the integer indices shown above. Every commit must appear in exactly one group — do not leave any unassigned."
         )
 
     def _summarize_question(self) -> str:
@@ -249,10 +249,11 @@ class LLMSummarizer:
                     CommitGroup(summary=str(raw.get("summary", "Untitled group")), commits=matched)
                 )
 
-            # Catch-all: commits the LLM didn't assign
-            unassigned = [c for i, c in enumerate(commits) if i not in assigned]
-            if unassigned:
-                groups.append(CommitGroup(summary="Other changes", commits=unassigned))
+            # Fallback: give each unassigned commit its own singleton group
+            # (uses the commit message as label — avoids a vague "Other changes" bucket)
+            for i, commit in enumerate(commits):
+                if i not in assigned:
+                    groups.append(CommitGroup(summary=commit.message, commits=[commit]))
 
             return groups
         except Exception as e:
