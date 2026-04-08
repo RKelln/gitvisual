@@ -243,9 +243,10 @@ def generate(
     except ImportError:
         pass
 
+    effective_model = model or config.llm.model
     summarizer = make_summarizer(
         enabled=summarize,
-        model=model or config.llm.model,
+        model=effective_model,
         api_key_env=config.llm.api_key_env,
         api_base=config.llm.api_base,
         max_tokens=max_tokens if max_tokens is not None else config.llm.max_tokens,
@@ -357,13 +358,13 @@ def generate(
         elif total_groups > 0:
             console.print(
                 f"\n[dim]Commits were grouped but summaries failed (check stderr for details).\n"
-                f"  Model: [bold]{config.llm.model}[/bold] — likely a transient rate limit.[/dim]"
+                f"  Model: [bold]{effective_model}[/bold] — likely a transient rate limit.[/dim]"
             )
         else:
             msg = (
                 f"\n[yellow]No LLM summaries were generated.[/yellow] "
                 f"The LLM was reached but all calls failed (check stderr for details).\n"
-                f"  Model: [bold]{config.llm.model}[/bold]\n"
+                f"  Model: [bold]{effective_model}[/bold]\n"
             )
             if config.llm.max_tokens_grouping < 2048:
                 msg += (
