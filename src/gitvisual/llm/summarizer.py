@@ -94,10 +94,14 @@ class LLMSummarizer:
     def _summarize_question(self) -> str:
         """Summary instruction only (no commits). Used as turn-2 user content."""
         return (
-            "Write a one-sentence summary of what was accomplished today.\n"
-            "- If this looks like a new project or initial setup, describe what the project IS and what was built.\n"
-            "- Otherwise, describe the most significant change and why it matters.\n"
-            "- Be specific — a reader should understand the work without reading the commits."
+            "Write a one-sentence summary (max 30 words) of what was accomplished.\n"
+            "Style: verb-first, active voice, telegraphic — like a changelog entry or PR title.\n"
+            "- Start directly with an action verb: Added, Fixed, Shipped, Built, Refactored, Extended, etc.\n"
+            "- NEVER start with 'Today', 'The repo', 'The project', 'The codebase', 'This commit', or any other preamble.\n"
+            "- Active voice only — 'Added X' not 'X was added'.\n"
+            "- For a new project or initial setup: name what the project IS, then what was built.\n"
+            "- Otherwise: lead with the single most significant change.\n"
+            "- Be specific — a reader must understand the work without reading the commits."
         )
 
     def _build_prompt(self, day: DaySummary) -> str:
@@ -260,11 +264,14 @@ class LLMSummarizer:
             return None
 
         system = (
-            "You write short summaries of a day's coding work for a visual progress card. "
-            "Rules: start with an action verb (Built, Started, Fixed, Added, Shipped, Refactored, etc.). "
-            "Name what was built or changed — do not be vague. "
-            "One sentence; two at most. No filenames, no jargon. "
-            "Reply with only the summary — no preamble, explanation, or enclosing quotes."
+            "You write one-sentence summaries of a day's coding work for a visual progress card. "
+            "Style: verb-first, active voice, telegraphic — like a changelog entry or PR title. "
+            "Rules: "
+            "(1) Start with an action verb — Built, Added, Fixed, Shipped, Refactored, Extended, Wired, etc. "
+            "(2) Active voice only — never 'X was added', always 'Added X'. "
+            "(3) Never open with 'Today', 'The repo', 'The project', 'The codebase', 'This commit', or any subject preamble. "
+            "(4) One sentence, 30 words maximum. No filenames, no jargon. "
+            "Reply with only the summary — no explanation, quotes, or extra punctuation."
         )
         prompt = self._build_prompt(day)
         messages: list[dict[str, str]] = [
@@ -325,8 +332,10 @@ class LLMSummarizer:
         system_msg: dict[str, str] = {
             "role": "system",
             "content": (
-                "You are an assistant that helps generate visual progress cards from git commit history. "
-                "Reply with only valid JSON when asked for JSON — no preamble."
+                "You help generate visual progress cards from git commit history. "
+                "When asked for JSON, reply with only valid JSON — no preamble. "
+                "When asked for a summary, use verb-first active voice (changelog style): "
+                "start with an action verb, never with 'Today', 'The repo', 'The project', or any subject preamble."
             ),
         }
         context = self._format_commit_context(day)
