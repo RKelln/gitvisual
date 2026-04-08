@@ -614,9 +614,11 @@ class TestGenerateLLMSummary:
 
         assert result.exit_code == 0
         # With summarize_and_group(): Turn 1 = grouping (uses max_tokens_grouping),
+        # optional Turn 1.5 = retry for unassigned commits (uses max_tokens_grouping),
         # Turn 2 = summary (uses max_tokens overridden to 42).
+        # Turn 2 is always the last call, regardless of whether Turn 1.5 fired.
         assert len(all_calls) >= 2
-        assert all_calls[1].get("max_tokens") == 42
+        assert all_calls[-1].get("max_tokens") == 42
 
 
 class TestGenerateGroupCommits:

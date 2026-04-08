@@ -226,8 +226,14 @@ class LLMSummarizer:
             return content
         return self._call_llm(messages, max_tokens, **extra_kwargs)
 
-    def _parse_groups(self, content: str, day: DaySummary) -> list[CommitGroup] | None:
-        """Parse JSON groups response and match commit indices. Logs to stderr on failure."""
+    def _parse_groups(
+        self, content: str, day: DaySummary, *, singleton_fallback: bool = True
+    ) -> list[CommitGroup] | None:
+        """Parse JSON groups response and match commit indices. Logs to stderr on failure.
+
+        When singleton_fallback=False, unassigned commits are silently omitted from the
+        returned list (caller is responsible for handling them).
+        """
         try:
             data = json.loads(content)
             raw_groups: list[dict[str, object]] = data["groups"]  # KeyError → caught below
@@ -249,11 +255,15 @@ class LLMSummarizer:
                     CommitGroup(summary=str(raw.get("summary", "Untitled group")), commits=matched)
                 )
 
-            # Fallback: give each unassigned commit its own singleton group
-            # (uses the commit message as label — avoids a vague "Other changes" bucket)
-            for i, commit in enumerate(commits):
-                if i not in assigned:
-                    groups.append(CommitGroup(summary=commit.message, commits=[commit]))
+            # Drop LLM-generated groups with no commits (hallucinated empty groups)
+            groups = [g for g in groups if g.commits]
+
+            if singleton_fallback:
+                # Fallback: give each unassigned commit its own singleton group
+                # (uses the commit message as label — avoids a vague "Other changes" bucket)
+                for i, commit in enumerate(commits):
+                    if i not in assigned:
+                        groups.append(CommitGroup(summary=commit.message, commits=[commit]))
 
             return groups
         except Exception as e:
@@ -262,6 +272,25 @@ class LLMSummarizer:
                 snippet = content[:200].replace("\n", " ")
                 print(f"[debug] content snippet: {snippet!r}", file=sys.stderr)  # noqa: T201
             return None
+
+    def _unassigned_commits(
+        self, groups: list[CommitGroup], all_commits: list[Commit]
+    ) -> list[Commit]:
+        """Return commits from all_commits that don't appear in any group."""
+        grouped_hashes = {c.hash for g in groups for c in g.commits}
+        return [c for c in all_commits if c.hash not in grouped_hashes]
+
+    def _apply_singleton_fallback(
+        self, groups: list[CommitGroup], all_commits: list[Commit]
+    ) -> list[CommitGroup]:
+        """Append a singleton group for every commit not already in groups."""
+        grouped_hashes = {c.hash for g in groups for c in g.commits}
+        extras = [
+            CommitGroup(summary=c.message, commits=[c])
+            for c in all_commits
+            if c.hash not in grouped_hashes
+        ]
+        return groups + extras if extras else groups
 
     def summarize(self, day: DaySummary) -> str | None:
         """Generate a 1-2 sentence plain-language summary of the day's work.
@@ -366,14 +395,50 @@ class LLMSummarizer:
             summary = self.summarize(day)
             return (summary, None)
 
-        groups = self._parse_groups(group_raw, day)
+        groups = self._parse_groups(group_raw, day, singleton_fallback=False)
         if groups is None:
             self._dbg("  → Turn 1 parse failed — falling back to single-turn summary")
             summary = self.summarize(day)
             return (summary, None)
 
-        group_lines = "  ".join(f"{g.summary!r} ({len(g.commits)})" for g in groups)
-        self._dbg(f"  → {len(groups)} group(s) parsed:  {group_lines}")
+        # Turn 1.5: retry unassigned commits (new independent grouping call)
+        unassigned = self._unassigned_commits(groups, day.commits)
+        if unassigned:
+            self._dbg(f"Turn 1.5 — retry grouping  {len(unassigned)} unassigned commit(s)")
+            retry_day = DaySummary(
+                date=day.date,
+                repo_path=day.repo_path,
+                repo_name=day.repo_name,
+                commits=unassigned,
+            )
+            retry_messages: list[dict[str, str]] = [
+                system_msg,
+                {"role": "user", "content": self._build_grouping_prompt(retry_day, max_groups)},
+            ]
+            retry_raw = self._call_llm_grouping(
+                retry_messages,
+                self.max_tokens_grouping,
+                timeout=self.timeout_grouping,
+            )
+            if retry_raw:
+                retry_groups = self._parse_groups(retry_raw, retry_day, singleton_fallback=False)
+                if retry_groups:
+                    groups = groups + retry_groups
+                    self._dbg(f"  → {len(retry_groups)} new group(s) from retry")
+                else:
+                    self._dbg("  → retry parse failed")
+            else:
+                self._dbg("  → retry failed (no response)")
+
+        # Singleton fallback for any commits still unassigned after all rounds
+        groups = self._apply_singleton_fallback(groups, day.commits)
+
+        group_lines = "\n".join(
+            f"    · {g.summary} ({len(g.commits)} commit{'s' if len(g.commits) != 1 else ''}"
+            f", +{g.total_insertions} -{g.total_deletions})"
+            for g in groups
+        )
+        self._dbg(f"  → {len(groups)} group(s) parsed:\n{group_lines}")
 
         # Turn 2: append assistant reply + summary question (no commits repeated)
         self._dbg("Turn 2 — summary")

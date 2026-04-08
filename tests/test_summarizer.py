@@ -1324,6 +1324,143 @@ class TestLLMSummarizerSummarizeAndGroup:
         )
         assert s.summarize_and_group(empty_day) == (None, None)
 
+    # --- Turn 1.5 retry for unassigned commits ---
+
+    def test_unassigned_commits_trigger_retry_round(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Turn 1 partial assignment → Turn 1.5 fires for unassigned → all commits in result."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, [c1, c2] = self._make_day(tmp_path)
+
+        # Turn 1: only c1 (index 0) assigned; c2 left out
+        turn1 = json.dumps({"groups": [{"summary": "Login feature", "commit_indices": [0]}]})
+        # Turn 1.5: retry_day has just c2, re-indexed as 0
+        turn1_5 = json.dumps({"groups": [{"summary": "Auth bug fix", "commit_indices": [0]}]})
+        turn2 = "Shipped login and fixed auth."
+
+        monkeypatch.setitem(
+            sys.modules,
+            "litellm",
+            _make_fake_litellm_seq([turn1, turn1_5, turn2]),
+        )
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY", json_response_format=False)
+        summary, groups = s.summarize_and_group(day)
+
+        assert summary == turn2
+        assert groups is not None
+        # Both commits must appear exactly once
+        all_commits = [c for g in groups for c in g.commits]
+        assert sorted(all_commits, key=lambda c: c.hash) == sorted([c1, c2], key=lambda c: c.hash)
+        # Both real LLM groups present (no singletons needed)
+        summaries = {g.summary for g in groups}
+        assert "Login feature" in summaries
+        assert "Auth bug fix" in summaries
+
+    def test_no_retry_when_all_commits_assigned(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When Turn 1 assigns all commits, no Turn 1.5 call is made (2 calls total)."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, _ = self._make_day(tmp_path)
+
+        call_count = [0]
+        responses = [
+            json.dumps({"groups": [{"summary": "All work", "commit_indices": [0, 1]}]}),
+            "Did everything.",
+        ]
+
+        def counting_completion(**kwargs: object) -> object:
+            from types import SimpleNamespace
+
+            idx = call_count[0]
+            call_count[0] += 1
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=responses[idx]))]
+            )
+
+        fake = types.ModuleType("litellm")
+        fake.suppress_debug_info = False  # type: ignore[attr-defined]
+        fake.verbose = True  # type: ignore[attr-defined]
+        fake.completion = counting_completion  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY", json_response_format=False)
+        summary, groups = s.summarize_and_group(day)
+
+        assert call_count[0] == 2  # Turn 1 + Turn 2 only
+        assert groups is not None
+        assert summary == "Did everything."
+
+    def test_retry_bad_json_falls_back_to_singletons(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Turn 1.5 returning invalid JSON → unassigned commit becomes singleton group."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, [_c1, c2] = self._make_day(tmp_path)
+
+        turn1 = json.dumps({"groups": [{"summary": "Login", "commit_indices": [0]}]})
+        monkeypatch.setitem(
+            sys.modules,
+            "litellm",
+            _make_fake_litellm_seq([turn1, "not valid json", "summary"]),
+        )
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY", json_response_format=False)
+        _summary, groups = s.summarize_and_group(day)
+
+        assert groups is not None
+        all_commits = [c for g in groups for c in g.commits]
+        assert c2 in all_commits
+        # c2 singleton uses the commit message as its summary
+        singleton = next(g for g in groups if c2 in g.commits)
+        assert singleton.summary == c2.message
+
+    def test_retry_empty_response_falls_back_to_singletons(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Turn 1.5 returning None → unassigned commit becomes singleton group."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, [_c1, c2] = self._make_day(tmp_path)
+
+        turn1 = json.dumps({"groups": [{"summary": "Login", "commit_indices": [0]}]})
+        # None in the sequence → content=None → _call_llm returns None
+        monkeypatch.setitem(
+            sys.modules,
+            "litellm",
+            _make_fake_litellm_seq([turn1, None, "summary"]),  # type: ignore[list-item]
+        )
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY", json_response_format=False)
+        _summary, groups = s.summarize_and_group(day)
+
+        assert groups is not None
+        all_commits = [c for g in groups for c in g.commits]
+        assert c2 in all_commits
+
+    def test_retry_debug_output(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """debug=True prints Turn 1.5 info to stderr when unassigned commits are retried."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, _ = self._make_day(tmp_path)
+
+        turn1 = json.dumps({"groups": [{"summary": "Login", "commit_indices": [0]}]})
+        turn1_5 = json.dumps({"groups": [{"summary": "Fix", "commit_indices": [0]}]})
+        monkeypatch.setitem(
+            sys.modules,
+            "litellm",
+            _make_fake_litellm_seq([turn1, turn1_5, "summary"]),
+        )
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY", debug=True, json_response_format=False)
+        s.summarize_and_group(day)
+
+        captured = capsys.readouterr()
+        assert "1.5" in captured.err
+        assert "unassigned" in captured.err
+
     def test_no_json_response_format_omits_from_turn1(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
