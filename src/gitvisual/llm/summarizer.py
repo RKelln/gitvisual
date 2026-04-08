@@ -42,6 +42,7 @@ class LLMSummarizer:
         max_tokens_grouping: int | None = 4096,
         timeout: int = 30,
         timeout_grouping: int = 120,
+        json_response_format: bool = True,
         debug: bool = False,
     ) -> None:
         self.model = model
@@ -51,6 +52,7 @@ class LLMSummarizer:
         self.max_tokens_grouping = max_tokens_grouping
         self.timeout = timeout
         self.timeout_grouping = timeout_grouping
+        self.json_response_format = json_response_format
         self.debug = debug
 
     def _dbg(self, *parts: str) -> None:
@@ -274,7 +276,11 @@ class LLMSummarizer:
             messages,
             self.max_tokens_grouping,
             timeout=self.timeout_grouping,
-            response_format={"type": "json_object"},
+            **(
+                {}
+                if not self.json_response_format
+                else {"response_format": {"type": "json_object"}}
+            ),
         )
         if not content:
             return None
@@ -311,7 +317,11 @@ class LLMSummarizer:
             messages,
             self.max_tokens_grouping,
             timeout=self.timeout_grouping,
-            response_format={"type": "json_object"},
+            **(
+                {}
+                if not self.json_response_format
+                else {"response_format": {"type": "json_object"}}
+            ),
         )
 
         if group_raw is None:
@@ -424,6 +434,7 @@ def make_summarizer(
     max_tokens_grouping: int | None = 4096,
     timeout: int = 30,
     timeout_grouping: int = 120,
+    json_response_format: bool = True,
     stub: bool = False,
     debug: bool = False,
 ) -> Summarizer:
@@ -449,5 +460,6 @@ def make_summarizer(
         max_tokens_grouping=_to_limit(max_tokens_grouping),
         timeout=timeout,
         timeout_grouping=timeout_grouping,
+        json_response_format=json_response_format,
         debug=debug,
     )

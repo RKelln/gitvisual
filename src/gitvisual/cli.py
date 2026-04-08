@@ -176,6 +176,13 @@ def generate(
         bool,
         typer.Option("--debug", "-D", help="Print LLM prompt/response debug info to stderr."),
     ] = False,
+    json_response_format: Annotated[
+        bool,
+        typer.Option(
+            "--json-response-format/--no-json-response-format",
+            help="Request JSON output mode from the LLM. Disable for models that don't support it (e.g. free-tier models).",
+        ),
+    ] = True,
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Output results as JSON to stdout (for scripts/agents)."),
@@ -266,6 +273,7 @@ def generate(
         ),
         timeout=config.llm.timeout,
         timeout_grouping=config.llm.timeout_grouping,
+        json_response_format=json_response_format and config.llm.json_response_format,
         stub=stub_llm,
         debug=debug_llm,
     )

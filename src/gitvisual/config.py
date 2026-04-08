@@ -36,6 +36,7 @@ class LLMConfig(BaseModel):
     max_tokens_grouping: int = 4096  # set to 0 (or negative) to omit max_tokens for grouping
     timeout: int = 30
     timeout_grouping: int = 120
+    json_response_format: bool = True  # set to false for models that don't support response_format=json_object (e.g. many free-tier models)
 
 
 class RenderConfig(BaseModel):
@@ -146,6 +147,7 @@ max_tokens = 1500  # set to 0 to omit max_tokens and let the model decide its ow
 max_tokens_grouping = 4096  # set to 0 to omit max_tokens for the grouping turn
 timeout = 30
 timeout_grouping = 120  # grouping turn can be slow; give it more time
+json_response_format = true  # set to false for models that don't support response_format=json_object (many free-tier models)
 
 [render]
 card_width = 1200

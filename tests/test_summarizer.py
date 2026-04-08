@@ -152,6 +152,17 @@ class TestMakeSummarizer:
         s = make_summarizer(enabled=True, model="openai/gpt-4o-mini", api_key_env="KEY")
         assert isinstance(s, LLMSummarizer)
 
+    def test_json_response_format_false_stored(self) -> None:
+        """make_summarizer(json_response_format=False) stores False on the instance."""
+        s = make_summarizer(enabled=True, model="x", api_key_env="KEY", json_response_format=False)
+        assert isinstance(s, LLMSummarizer)
+        assert s.json_response_format is False
+
+    def test_json_response_format_true_by_default(self) -> None:
+        s = make_summarizer(enabled=True, model="x", api_key_env="KEY")
+        assert isinstance(s, LLMSummarizer)
+        assert s.json_response_format is True
+
     @pytest.mark.parametrize("sentinel", [0, -1, -999])
     def test_zero_or_negative_max_tokens_becomes_none(self, sentinel: int) -> None:
         """max_tokens <= 0 must be stored as None (omit from litellm calls)."""
@@ -775,6 +786,36 @@ class TestLLMSummarizerGroupCommits:
 
         assert captured.get("response_format") == {"type": "json_object"}
 
+    def test_no_json_response_format_omits_response_format(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """json_response_format=False must omit response_format from litellm kwargs."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, commits = self._make_day(tmp_path)
+        captured: dict = {}
+
+        def capturing_completion(**kwargs: object) -> object:
+            from types import SimpleNamespace
+
+            captured.update(kwargs)
+            content = json.dumps(
+                {"groups": [{"summary": "g", "commit_indices": list(range(len(commits)))}]}
+            )
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+            )
+
+        fake = types.ModuleType("litellm")
+        fake.suppress_debug_info = False  # type: ignore[attr-defined]
+        fake.verbose = True  # type: ignore[attr-defined]
+        fake.completion = capturing_completion  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY", json_response_format=False)
+        s.group_commits(day)
+
+        assert "response_format" not in captured
+
     def test_group_commits_uses_max_tokens_grouping_not_max_tokens(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1145,6 +1186,38 @@ class TestLLMSummarizerSummarizeAndGroup:
             date=date(2025, 4, 7), repo_path=tmp_path, repo_name="repo", commits=[]
         )
         assert s.summarize_and_group(empty_day) == (None, None)
+
+    def test_no_json_response_format_omits_from_turn1(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """json_response_format=False must not send response_format in summarize_and_group."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, _ = self._make_day(tmp_path)
+        captured_calls: list[dict] = []
+
+        groups_json = json.dumps({"groups": [{"summary": "g", "commit_indices": [0, 1]}]})
+
+        def capturing(**kwargs: object) -> object:
+            from types import SimpleNamespace
+
+            captured_calls.append(dict(kwargs))
+            idx = len(captured_calls) - 1
+            content = groups_json if idx == 0 else "Did stuff."
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+            )
+
+        fake = types.ModuleType("litellm")
+        fake.suppress_debug_info = False  # type: ignore[attr-defined]
+        fake.verbose = True  # type: ignore[attr-defined]
+        fake.completion = capturing  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY", json_response_format=False)
+        s.summarize_and_group(day)
+
+        assert len(captured_calls) >= 1
+        assert "response_format" not in captured_calls[0]
 
 
 class TestStubSummarizerSummarizeAndGroup:
