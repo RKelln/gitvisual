@@ -271,6 +271,7 @@ def generate(
     current = d_from
     total_cards = 0
     total_summaries = 0
+    total_groups = 0
     results: list[dict[str, Any]] = []
     from datetime import timedelta as td
 
@@ -296,6 +297,7 @@ def generate(
                         total_summaries += 1
                     if groups is not None:
                         day = day.model_copy(update={"commit_groups": groups})
+                        total_groups += 1
 
                 card_path = _output_path(out_dir, day.repo_name, current)
                 renderer.render_to_file(day, card_path)
@@ -351,6 +353,11 @@ def generate(
                 f"${key_var} is not set.\n"
                 f"  Set it with: export {key_var}=<your-key>\n"
                 f"  Run [bold]gitvisual config show[/bold] to review LLM settings."
+            )
+        elif total_groups > 0:
+            console.print(
+                f"\n[dim]Commits were grouped but summaries failed (check stderr for details).\n"
+                f"  Model: [bold]{config.llm.model}[/bold] — likely a transient rate limit.[/dim]"
             )
         else:
             msg = (
