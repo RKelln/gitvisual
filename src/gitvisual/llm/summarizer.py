@@ -167,23 +167,53 @@ class LLMSummarizer:
                 preview = content[:80].replace("\n", " ")
                 self._dbg(f"  → {len(content)} chars in {elapsed:.1f}s: {preview!r}")
             else:
-                finish_reason = response.choices[0].finish_reason
                 try:
+                    finish_reason = response.choices[0].finish_reason
                     completion_tokens = response.usage.completion_tokens
                     prompt_tokens = response.usage.prompt_tokens
-                    usage_str = f", usage={prompt_tokens}+{completion_tokens} tokens"
+                    reason_str = f" finish_reason={finish_reason!r}, usage={prompt_tokens}+{completion_tokens} tokens"
                 except Exception:
-                    usage_str = ""
-                self._dbg(
-                    f"  → (empty response) in {elapsed:.1f}s"
-                    f" finish_reason={finish_reason!r}{usage_str}"
-                )
+                    reason_str = ""
+                self._dbg(f"  → (empty response) in {elapsed:.1f}s{reason_str}")
             return content if content else None
         except Exception as e:
             print(f"[gitvisual] LLM call failed: {type(e).__name__}: {e}", file=sys.stderr)  # noqa: T201
             if self.debug:
                 print(traceback.format_exc(), file=sys.stderr)  # noqa: T201
             return None
+
+    def _call_llm_grouping(
+        self,
+        messages: list[dict[str, str]],
+        max_tokens: int | None,
+        **extra_kwargs: object,
+    ) -> str | None:
+        """Call litellm for a grouping turn.
+
+        If ``json_response_format`` is enabled, passes
+        ``response_format={"type": "json_object"}`` to the model.  On empty
+        response it automatically retries *without* that parameter and warns
+        the user — many free-tier models silently return nothing when JSON mode
+        is requested.
+        """
+        if self.json_response_format:
+            content = self._call_llm(
+                messages,
+                max_tokens,
+                response_format={"type": "json_object"},
+                **extra_kwargs,
+            )
+            if content is None:
+                print(  # noqa: T201
+                    "[gitvisual] Warning: LLM returned empty response with JSON mode enabled. "
+                    "Retrying without response_format. "
+                    "To skip this retry, set json_response_format = false in config.toml "
+                    "or pass --no-json-response-format.",
+                    file=sys.stderr,
+                )
+                return self._call_llm(messages, max_tokens, **extra_kwargs)
+            return content
+        return self._call_llm(messages, max_tokens, **extra_kwargs)
 
     def _parse_groups(self, content: str, day: DaySummary) -> list[CommitGroup] | None:
         """Parse JSON groups response and match commit indices. Logs to stderr on failure."""
@@ -272,15 +302,10 @@ class LLMSummarizer:
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ]
-        content = self._call_llm(
+        content = self._call_llm_grouping(
             messages,
             self.max_tokens_grouping,
             timeout=self.timeout_grouping,
-            **(
-                {}
-                if not self.json_response_format
-                else {"response_format": {"type": "json_object"}}
-            ),
         )
         if not content:
             return None
@@ -313,15 +338,10 @@ class LLMSummarizer:
             system_msg,
             {"role": "user", "content": context + "\n\n" + grouping_q},
         ]
-        group_raw = self._call_llm(
+        group_raw = self._call_llm_grouping(
             messages,
             self.max_tokens_grouping,
             timeout=self.timeout_grouping,
-            **(
-                {}
-                if not self.json_response_format
-                else {"response_format": {"type": "json_object"}}
-            ),
         )
 
         if group_raw is None:

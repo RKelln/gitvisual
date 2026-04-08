@@ -979,6 +979,119 @@ class TestLLMSummarizerGroupCommits:
 
 
 # ---------------------------------------------------------------------------
+# LLMSummarizer JSON-mode auto-fallback
+# ---------------------------------------------------------------------------
+
+
+class TestLLMSummarizerJsonFallback:
+    """When json_response_format=True and the first call returns empty, the
+    summarizer should automatically retry without response_format and warn."""
+
+    def _make_day(self, tmp_path: Path) -> DaySummary:
+        c1 = make_commit()
+        return make_day_summary(commits=[c1], tmp_path=tmp_path)
+
+    def _make_seq_fake(self, responses: list[str | None]) -> tuple[types.ModuleType, list[dict]]:
+        """Fake litellm that returns successive responses; records kwargs of each call."""
+        from types import SimpleNamespace
+
+        calls: list[dict] = []
+        fake = types.ModuleType("litellm")
+        fake.suppress_debug_info = False  # type: ignore[attr-defined]
+        fake.verbose = True  # type: ignore[attr-defined]
+        call_count = [0]
+
+        def completion(**kwargs: object) -> object:
+            idx = call_count[0]
+            call_count[0] += 1
+            calls.append(dict(kwargs))
+            content = responses[idx]
+            msg = SimpleNamespace(content=content)
+            choice = SimpleNamespace(message=msg, finish_reason="stop")
+            usage = SimpleNamespace(
+                prompt_tokens=100,
+                completion_tokens=0 if content is None else max(1, len(content or "") // 4),
+            )
+            return SimpleNamespace(choices=[choice], usage=usage)
+
+        fake.completion = completion  # type: ignore[attr-defined]
+        return fake, calls
+
+    def test_group_commits_retries_without_response_format_on_empty(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Empty response with json_response_format=True triggers retry without response_format."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day = self._make_day(tmp_path)
+        good_json = json.dumps({"groups": [{"summary": "g", "commit_indices": [0]}]})
+        fake, calls = self._make_seq_fake([None, good_json])
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY", json_response_format=True)
+        result = s.group_commits(day)
+
+        assert result is not None
+        assert len(calls) == 2
+        assert "response_format" in calls[0]
+        assert "response_format" not in calls[1]
+
+    def test_group_commits_fallback_warns_to_stderr(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Fallback prints a warning to stderr with actionable config advice."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day = self._make_day(tmp_path)
+        good_json = json.dumps({"groups": [{"summary": "g", "commit_indices": [0]}]})
+        fake, _ = self._make_seq_fake([None, good_json])
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY", json_response_format=True)
+        s.group_commits(day)
+
+        captured = capsys.readouterr()
+        assert "json_response_format" in captured.err
+        assert "json" in captured.err.lower()
+
+    def test_group_commits_no_retry_when_json_format_disabled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When json_response_format=False, only one call is made (no fallback)."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day = self._make_day(tmp_path)
+        # First response empty; if retry happened, second would succeed — but it shouldn't
+        good_json = json.dumps({"groups": [{"summary": "g", "commit_indices": [0]}]})
+        fake, calls = self._make_seq_fake([None, good_json])
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY", json_response_format=False)
+        result = s.group_commits(day)
+
+        assert result is None
+        assert len(calls) == 1
+
+    def test_summarize_and_group_retries_turn1_without_response_format(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """summarize_and_group Turn 1 also falls back on empty response."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        c1 = make_commit()
+        c2 = make_commit(hash="b" * 16)
+        day = make_day_summary(commits=[c1, c2], tmp_path=tmp_path)
+        groups_json = json.dumps({"groups": [{"summary": "g", "commit_indices": [0, 1]}]})
+        fake, calls = self._make_seq_fake([None, groups_json, "summary text"])
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY", json_response_format=True)
+        summary, groups = s.summarize_and_group(day)
+
+        assert groups is not None
+        assert summary == "summary text"
+        assert len(calls) >= 2
+        assert "response_format" in calls[0]
+        assert "response_format" not in calls[1]
+
+
+# ---------------------------------------------------------------------------
 # LLMSummarizer.summarize_and_group (two-turn session)
 # ---------------------------------------------------------------------------
 
