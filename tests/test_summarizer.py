@@ -149,9 +149,7 @@ class TestMakeSummarizer:
         c1 = make_commit()
         day = make_day_summary(commits=[c1], tmp_path=tmp_path)
 
-        response = json.dumps(
-            {"groups": [{"summary": "Feature work", "commit_hashes": [c1.short_hash]}]}
-        )
+        response = json.dumps({"groups": [{"summary": "Feature work", "commit_indices": [0]}]})
         monkeypatch.setitem(sys.modules, "litellm", _make_fake_litellm(response))
 
         s = make_summarizer(
@@ -343,18 +341,18 @@ class TestLLMSummarizerGroupCommits:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
-        day, (c1, c2, c3) = self._make_day(tmp_path)
+        day, _commits = self._make_day(tmp_path)
 
         response = json.dumps(
             {
                 "groups": [
                     {
                         "summary": "Auth work",
-                        "commit_hashes": [c1.short_hash, c2.short_hash],
+                        "commit_indices": [0, 1],
                     },
                     {
                         "summary": "Maintenance",
-                        "commit_hashes": [c3.short_hash],
+                        "commit_indices": [2],
                     },
                 ]
             }
@@ -375,14 +373,14 @@ class TestLLMSummarizerGroupCommits:
     ) -> None:
         """Stats must come from real Commit objects, never from LLM output."""
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
-        day, (c1, c2, c3) = self._make_day(tmp_path)
+        day, _commits = self._make_day(tmp_path)
 
         response = json.dumps(
             {
                 "groups": [
                     {
                         "summary": "All",
-                        "commit_hashes": [c1.short_hash, c2.short_hash, c3.short_hash],
+                        "commit_indices": [0, 1, 2],
                         # LLM might hallucinate extra fields — they must be ignored
                         "total_insertions": 99999,
                         "total_deletions": 99999,
@@ -421,7 +419,7 @@ class TestLLMSummarizerGroupCommits:
                     "groups": [
                         {
                             "summary": "g",
-                            "commit_hashes": [c.short_hash for c in day.commits],
+                            "commit_indices": list(range(len(day.commits))),
                         }
                     ]
                 }
@@ -450,13 +448,13 @@ class TestLLMSummarizerGroupCommits:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
-        day, (c1, c2, c3) = self._make_day(tmp_path)
+        day, (_c1, c2, c3) = self._make_day(tmp_path)
 
         # LLM only assigns c1 — c2 and c3 should land in "Other changes"
         response = json.dumps(
             {
                 "groups": [
-                    {"summary": "Login feature", "commit_hashes": [c1.short_hash]},
+                    {"summary": "Login feature", "commit_indices": [0]},
                 ]
             }
         )
@@ -493,24 +491,24 @@ class TestLLMSummarizerGroupCommits:
             commits, key=lambda c: c.hash
         )
 
-    # --- unrecognised hash silently ignored ---
+    # --- unrecognised index silently ignored ---
 
-    def test_unrecognised_hash_silently_ignored(
+    def test_unrecognised_index_silently_ignored(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
-        day, (c1, c2, c3) = self._make_day(tmp_path)
+        day, (c1, _c2, _c3) = self._make_day(tmp_path)
 
         response = json.dumps(
             {
                 "groups": [
                     {
                         "summary": "Real work",
-                        "commit_hashes": [c1.short_hash, "deadbeef"],  # deadbeef is bogus
+                        "commit_indices": [0, 99],  # 99 is out-of-range
                     },
                     {
                         "summary": "Other",
-                        "commit_hashes": [c2.short_hash, c3.short_hash],
+                        "commit_indices": [1, 2],
                     },
                 ]
             }
@@ -521,24 +519,24 @@ class TestLLMSummarizerGroupCommits:
         result = s.group_commits(day)
 
         assert result is not None
-        # "deadbeef" is ignored; c1 in "Real work", no catch-all needed
+        # index 99 is ignored; c1 in "Real work", no catch-all needed
         real_work = next(g for g in result if g.summary == "Real work")
         assert real_work.commits == [c1]
         # No "Other changes" catch-all because all real commits were assigned
         summaries = {g.summary for g in result}
         assert "Other changes" not in summaries
 
-    # --- full hash matching ---
+    # --- out-of-bounds index silently ignored ---
 
-    def test_full_hash_matching(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """LLM returning full 40-char hashes should also be matched."""
+    def test_out_of_bounds_index_silently_ignored(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """LLM returning an out-of-range index should be silently ignored."""
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
         c1 = make_commit(hash="aabbccdd" * 5)
         day = make_day_summary(commits=[c1], tmp_path=tmp_path)
 
-        response = json.dumps(
-            {"groups": [{"summary": "Full hash group", "commit_hashes": [c1.hash]}]}
-        )
+        response = json.dumps({"groups": [{"summary": "Only real", "commit_indices": [0, 999]}]})
         monkeypatch.setitem(sys.modules, "litellm", _make_fake_litellm(response))
 
         s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
@@ -613,7 +611,7 @@ class TestLLMSummarizerGroupCommits:
         """A group with a missing 'summary' key should use 'Untitled group' fallback;
         other groups are unaffected."""
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
-        day, (c1, c2, c3) = self._make_day(tmp_path)
+        day, _commits = self._make_day(tmp_path)
 
         # c1 group has no 'summary' key; c2+c3 group has a valid summary
         response = json.dumps(
@@ -621,11 +619,11 @@ class TestLLMSummarizerGroupCommits:
                 "groups": [
                     {
                         # 'summary' key intentionally omitted
-                        "commit_hashes": [c1.short_hash],
+                        "commit_indices": [0],
                     },
                     {
                         "summary": "Auth fixes",
-                        "commit_hashes": [c2.short_hash, c3.short_hash],
+                        "commit_indices": [1, 2],
                     },
                 ]
             }
@@ -672,7 +670,7 @@ class TestLLMSummarizerGroupCommits:
                     "groups": [
                         {
                             "summary": "g",
-                            "commit_hashes": [c.short_hash for c in commits],
+                            "commit_indices": list(range(len(commits))),
                         }
                     ]
                 }
@@ -709,7 +707,7 @@ class TestLLMSummarizerGroupCommits:
                     "groups": [
                         {
                             "summary": "g",
-                            "commit_hashes": [c.short_hash for c in commits],
+                            "commit_indices": list(range(len(commits))),
                         }
                     ]
                 }
@@ -765,33 +763,33 @@ class TestLLMSummarizerGroupCommits:
         [
             (
                 "single_duplicate_across_groups",
-                lambda hashes: {
+                lambda indices: {
                     "groups": [
-                        {"summary": "Group A", "commit_hashes": [hashes[0]]},
-                        {"summary": "Group B", "commit_hashes": [hashes[0]]},  # duplicate
-                        {"summary": "Group C", "commit_hashes": [hashes[1]]},
+                        {"summary": "Group A", "commit_indices": [indices[0]]},
+                        {"summary": "Group B", "commit_indices": [indices[0]]},  # duplicate
+                        {"summary": "Group C", "commit_indices": [indices[1]]},
                     ]
                 },
             ),
             (
-                "same_hash_twice_in_same_group",
-                lambda hashes: {
+                "same_index_twice_in_same_group",
+                lambda indices: {
                     "groups": [
                         {
                             "summary": "Group A",
-                            "commit_hashes": [hashes[0], hashes[0]],  # same hash twice
+                            "commit_indices": [indices[0], indices[0]],  # same index twice
                         },
-                        {"summary": "Group B", "commit_hashes": [hashes[1]]},
+                        {"summary": "Group B", "commit_indices": [indices[1]]},
                     ]
                 },
             ),
             (
-                "hash_in_three_groups",
-                lambda hashes: {
+                "index_in_three_groups",
+                lambda indices: {
                     "groups": [
-                        {"summary": "Group A", "commit_hashes": [hashes[0]]},
-                        {"summary": "Group B", "commit_hashes": [hashes[0]]},  # dup
-                        {"summary": "Group C", "commit_hashes": [hashes[0]]},  # dup again
+                        {"summary": "Group A", "commit_indices": [indices[0]]},
+                        {"summary": "Group B", "commit_indices": [indices[0]]},  # dup
+                        {"summary": "Group C", "commit_indices": [indices[0]]},  # dup again
                     ]
                 },
             ),
@@ -804,13 +802,13 @@ class TestLLMSummarizerGroupCommits:
         scenario: str,
         build_response: object,
     ) -> None:
-        """A commit hash that appears in multiple groups is assigned only to the first."""
+        """A commit index that appears in multiple groups is assigned only to the first."""
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
         c1 = make_commit(hash="aabb" * 4)
         c2 = make_commit(hash="ccdd" * 4)
         day = make_day_summary(commits=[c1, c2], tmp_path=tmp_path)
 
-        response = json.dumps(build_response([c1.short_hash, c2.short_hash]))  # type: ignore[operator]
+        response = json.dumps(build_response([0, 1]))  # type: ignore[operator]
         monkeypatch.setitem(sys.modules, "litellm", _make_fake_litellm(response))
 
         s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
@@ -874,11 +872,9 @@ class TestLLMSummarizerSummarizeAndGroup:
     ) -> None:
         """Two sequential LLM calls return (summary, groups) tuple."""
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
-        day, (c1, c2) = self._make_day(tmp_path)
+        day, _commits = self._make_day(tmp_path)
 
-        groups_json = json.dumps(
-            {"groups": [{"summary": "Auth work", "commit_hashes": [c1.short_hash, c2.short_hash]}]}
-        )
+        groups_json = json.dumps({"groups": [{"summary": "Auth work", "commit_indices": [0, 1]}]})
         summary_text = "Built authentication feature with login and bug fix."
 
         monkeypatch.setitem(
@@ -900,11 +896,9 @@ class TestLLMSummarizerSummarizeAndGroup:
     ) -> None:
         """If Turn 2 fails, groups from Turn 1 still returned; summary is None."""
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
-        day, (c1, _c2) = self._make_day(tmp_path)
+        day, _commits = self._make_day(tmp_path)
 
-        groups_json = json.dumps(
-            {"groups": [{"summary": "Auth work", "commit_hashes": [c1.short_hash]}]}
-        )
+        groups_json = json.dumps({"groups": [{"summary": "Auth work", "commit_indices": [0]}]})
 
         fake = types.ModuleType("litellm")
         fake.suppress_debug_info = False  # type: ignore[attr-defined]
@@ -956,14 +950,14 @@ class TestLLMSummarizerSummarizeAndGroup:
     ) -> None:
         """max_groups parameter value appears in Turn 1 messages."""
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
-        day, (c1, _) = self._make_day(tmp_path)
+        day, _ = self._make_day(tmp_path)
 
         fake = types.ModuleType("litellm")
         fake.suppress_debug_info = False  # type: ignore[attr-defined]
         fake.verbose = True  # type: ignore[attr-defined]
         captured_messages: list[list] = []
         responses = [
-            json.dumps({"groups": [{"summary": "g", "commit_hashes": [c1.short_hash]}]}),
+            json.dumps({"groups": [{"summary": "g", "commit_indices": [0]}]}),
             "summary",
         ]
         call_count = [0]
@@ -993,14 +987,14 @@ class TestLLMSummarizerSummarizeAndGroup:
     ) -> None:
         """max_groups=None → no group count hint in Turn 1 messages."""
         monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
-        day, (c1, _) = self._make_day(tmp_path)
+        day, _ = self._make_day(tmp_path)
 
         fake = types.ModuleType("litellm")
         fake.suppress_debug_info = False  # type: ignore[attr-defined]
         fake.verbose = True  # type: ignore[attr-defined]
         captured_messages: list[list] = []
         responses = [
-            json.dumps({"groups": [{"summary": "g", "commit_hashes": [c1.short_hash]}]}),
+            json.dumps({"groups": [{"summary": "g", "commit_indices": [0]}]}),
             "summary",
         ]
         call_count = [0]

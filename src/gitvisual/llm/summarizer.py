@@ -60,9 +60,9 @@ class LLMSummarizer:
     def _format_commits_for_prompt(self, day: DaySummary) -> str:
         """Return a formatted multi-line string of commits for use in prompts."""
         lines: list[str] = []
-        for commit in day.commits:
+        for i, commit in enumerate(day.commits):
             lines.append(
-                f"- {commit.short_hash} | {commit.message}"
+                f"{i}. {commit.message}"
                 f" | +{commit.insertions} -{commit.deletions}, {commit.files_changed} files"
             )
         return "\n".join(lines)
@@ -73,7 +73,7 @@ class LLMSummarizer:
             f"Repository: {day.repo_name}",
             f"Date: {day.date}",
             "",
-            "Commits (hash | message | +insertions -deletions, files_changed files):",
+            "Commits (index. message | +insertions -deletions, files_changed files):",
             self._format_commits_for_prompt(day),
         ]
         return "\n".join(lines)
@@ -84,8 +84,8 @@ class LLMSummarizer:
         return (
             f"Group the commits above into logical clusters.{hint}\n"
             "Return JSON with this exact schema:\n"
-            '{"groups": [{"summary": "plain-language label", "commit_hashes": ["<short_hash>", ...]}, ...]}\n'
-            "Use the short hashes shown above. Each commit must appear in at most one group."
+            '{"groups": [{"summary": "plain-language label", "commit_indices": [0, 3, 7]}, ...]}\n'
+            "Use the integer indices shown above. Each commit may appear in at most one group."
         )
 
     def _summarize_question(self) -> str:
@@ -167,36 +167,30 @@ class LLMSummarizer:
             return None
 
     def _parse_groups(self, content: str, day: DaySummary) -> list[CommitGroup] | None:
-        """Parse JSON groups response and match commit hashes. Logs to stderr on failure."""
+        """Parse JSON groups response and match commit indices. Logs to stderr on failure."""
         try:
             data = json.loads(content)
             raw_groups: list[dict[str, object]] = data["groups"]  # KeyError → caught below
 
-            # Build lookup: both short_hash and full hash → Commit (single loop)
-            hash_to_commit: dict[str, Commit] = {}
-            for c in day.commits:
-                hash_to_commit[c.hash] = c
-                hash_to_commit[c.short_hash] = c
-
-            assigned: set[str] = set()  # track by short_hash to avoid dupes
+            commits = day.commits
+            assigned: set[int] = set()
             groups: list[CommitGroup] = []
 
             for raw in raw_groups:
                 matched: list[Commit] = []
-                commit_hashes = raw.get("commit_hashes", [])
-                if not isinstance(commit_hashes, list):
-                    commit_hashes = []
-                for h in commit_hashes:
-                    found = hash_to_commit.get(str(h))
-                    if found is not None and found.short_hash not in assigned:
-                        matched.append(found)
-                        assigned.add(found.short_hash)
+                indices = raw.get("commit_indices", [])
+                if not isinstance(indices, list):
+                    indices = []
+                for idx in indices:
+                    if isinstance(idx, int) and 0 <= idx < len(commits) and idx not in assigned:
+                        matched.append(commits[idx])
+                        assigned.add(idx)
                 groups.append(
                     CommitGroup(summary=str(raw.get("summary", "Untitled group")), commits=matched)
                 )
 
             # Catch-all: commits the LLM didn't assign
-            unassigned = [c for c in day.commits if c.short_hash not in assigned]
+            unassigned = [c for i, c in enumerate(commits) if i not in assigned]
             if unassigned:
                 groups.append(CommitGroup(summary="Other changes", commits=unassigned))
 
