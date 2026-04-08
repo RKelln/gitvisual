@@ -4,6 +4,51 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.2.0] — LLM grouping reliability and debug tooling — 2026-04-07
+
+This release hardens the two-turn LLM grouping pipeline against real-world model
+quirks (empty responses, token caps, skipped commits) and adds comprehensive debug
+tooling to make diagnosing LLM failures fast and actionable.
+
+### Added
+- `--debug` / `-D` flag on `generate` exposes per-turn LLM details to stderr:
+  call parameters (model, max_tokens, timeout, estimated input tokens), response
+  previews, parsed group summaries, elapsed time per call, and per-call cost.
+- `--max-tokens-grouping` CLI flag overrides `max_tokens_grouping` from config,
+  mirroring the existing `--max-tokens` flag for the summary call.
+- `--no-json-response-format` flag (and `json_response_format = false` in config)
+  opts out of `response_format={type: json_object}`, enabling compatibility with
+  free-tier models that silently return empty responses when JSON mode is set.
+- Setting `max_tokens` or `max_tokens_grouping` to `0` in config omits the token
+  cap from the litellm call entirely, letting the model use its own default limit.
+- Turn 1.5 retry: when the LLM's grouping response omits commits, a second
+  independent call re-groups only the unassigned commits before the Turn 2 summary.
+
+### Fixed
+- Auto-retry grouping without JSON mode when Turn 1 returns an empty response
+  (common on free-tier models); warns the user to set `json_response_format = false`.
+- Graceful fallback to single-turn summary when Turn 1 returns an empty or
+  invalid JSON response, instead of producing a card with no summary or groups.
+- Unassigned commits now each become their own singleton group (using the commit
+  message as label) instead of being lumped into a vague "Other changes" bucket.
+- End-of-run warnings now differentiate a missing API key from an LLM call
+  failure, and always show the effective model name (including `--model` overrides).
+- `--debug` mode shows `finish_reason` and token counts on empty responses, full
+  tracebacks on call exceptions, and group summaries immediately after parsing.
+- End-of-run warning correctly distinguishes grouping-only success from total
+  failure; the yellow warning now only appears when both grouping and summary fail.
+
+### Changed
+- Grouping JSON schema switched from commit hashes to 0-based commit indices,
+  saving ~140 output tokens on large commit sets — enough to fit within free-tier
+  output caps on 80+ commit days.
+- Summary prompts enforce verb-first active voice and a 30-word cap, explicitly
+  banning preamble openers ("Today", "The repo", "The project", "The codebase").
+
+### Infrastructure
+- Test suite expanded significantly (+460 lines) covering retry logic, debug output
+  paths, error visibility, fallback behaviour, and new CLI flags.
+
 ## [v0.1.2] — Two-turn LLM session and --version flag — 2026-04-07
 
 LLM summarization now uses a single two-turn conversation: commits are sent
