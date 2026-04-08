@@ -301,8 +301,9 @@ class LLMSummarizer:
         )
 
         if group_raw is None:
-            self._dbg("  → Turn 1 failed (no response)")
-            return (None, None)
+            self._dbg("  → Turn 1 failed (no response) — falling back to single-turn summary")
+            summary = self.summarize(day)
+            return (summary, None)
 
         groups = self._parse_groups(group_raw, day)
         if groups is None:
