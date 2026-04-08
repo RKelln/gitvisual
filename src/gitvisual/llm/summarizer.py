@@ -165,7 +165,17 @@ class LLMSummarizer:
                 preview = content[:80].replace("\n", " ")
                 self._dbg(f"  → {len(content)} chars in {elapsed:.1f}s: {preview!r}")
             else:
-                self._dbg(f"  → (empty response) in {elapsed:.1f}s")
+                finish_reason = response.choices[0].finish_reason
+                try:
+                    completion_tokens = response.usage.completion_tokens
+                    prompt_tokens = response.usage.prompt_tokens
+                    usage_str = f", usage={prompt_tokens}+{completion_tokens} tokens"
+                except Exception:
+                    usage_str = ""
+                self._dbg(
+                    f"  → (empty response) in {elapsed:.1f}s"
+                    f" finish_reason={finish_reason!r}{usage_str}"
+                )
             return content if content else None
         except Exception as e:
             print(f"[gitvisual] LLM call failed: {type(e).__name__}: {e}", file=sys.stderr)  # noqa: T201
