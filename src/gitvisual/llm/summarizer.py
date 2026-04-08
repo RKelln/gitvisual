@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from typing import Protocol
 
 from gitvisual.git.models import Commit, CommitGroup, DaySummary
@@ -151,13 +152,15 @@ class LLMSummarizer:
                 f" model={self.model}"
             )
 
+            t0 = time.perf_counter()
             response = litellm.completion(**kwargs)
+            elapsed = time.perf_counter() - t0
             content = response.choices[0].message.content
             if content:
                 preview = content[:80].replace("\n", " ")
-                self._dbg(f"  → {len(content)} chars: {preview!r}")
+                self._dbg(f"  → {len(content)} chars in {elapsed:.1f}s: {preview!r}")
             else:
-                self._dbg("  → (empty response)")
+                self._dbg(f"  → (empty response) in {elapsed:.1f}s")
             return content if content else None
         except Exception as e:
             print(f"[gitvisual] LLM call failed: {e}", file=sys.stderr)  # noqa: T201
