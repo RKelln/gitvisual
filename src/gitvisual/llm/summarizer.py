@@ -166,10 +166,17 @@ class LLMSummarizer:
             t0 = time.perf_counter()
             response = litellm.completion(**kwargs)
             elapsed = time.perf_counter() - t0
+
+            try:
+                cost = litellm.completion_cost(completion_response=response)
+                cost_str = f" cost=${float(cost):.6f}" if cost else " cost=$0 (free)"
+            except Exception:
+                cost_str = ""
+
             content = response.choices[0].message.content
             if content:
                 preview = content[:80].replace("\n", " ")
-                self._dbg(f"  → {len(content)} chars in {elapsed:.1f}s: {preview!r}")
+                self._dbg(f"  → {len(content)} chars in {elapsed:.1f}s{cost_str}: {preview!r}")
             else:
                 try:
                     finish_reason = response.choices[0].finish_reason
@@ -178,7 +185,7 @@ class LLMSummarizer:
                     reason_str = f" finish_reason={finish_reason!r}, usage={prompt_tokens}+{completion_tokens} tokens"
                 except Exception:
                     reason_str = ""
-                self._dbg(f"  → (empty response) in {elapsed:.1f}s{reason_str}")
+                self._dbg(f"  → (empty response) in {elapsed:.1f}s{cost_str}{reason_str}")
             return content if content else None
         except Exception as e:
             print(f"[gitvisual] LLM call failed: {type(e).__name__}: {e}", file=sys.stderr)  # noqa: T201
