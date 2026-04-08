@@ -73,6 +73,31 @@ class TestLLMSummarizer:
         day = make_day_summary(tmp_path=tmp_path)
         assert s.summarize(day) is None
 
+    def test_missing_api_key_debug_message(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Missing API key emits a debug message when debug=True."""
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY", debug=True)
+        day = make_day_summary(tmp_path=tmp_path)
+        s.summarize(day)
+        captured = capsys.readouterr()
+        assert "OPENROUTER_API_KEY" in captured.err
+        assert "skipping" in captured.err
+
+    def test_litellm_import_error_debug_message(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Missing litellm emits a debug message when debug=True."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        monkeypatch.setitem(sys.modules, "litellm", None)  # type: ignore[call-overload]
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY", debug=True)
+        day = make_day_summary(tmp_path=tmp_path)
+        result = s.summarize(day)
+        assert result is None
+        captured = capsys.readouterr()
+        assert "litellm" in captured.err
+
     def test_returns_none_for_empty_day(self, tmp_path: Path) -> None:
         s = LLMSummarizer()
         day = DaySummary(date=date(2025, 4, 7), repo_path=tmp_path, repo_name="repo", commits=[])
@@ -581,6 +606,50 @@ class TestLLMSummarizerGroupCommits:
 
         s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
         assert s.group_commits(day) is None
+
+    def test_exception_stderr_includes_type_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Error message must include the exception type name."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day = make_day_summary(tmp_path=tmp_path)
+        monkeypatch.setitem(sys.modules, "litellm", _make_raising_litellm(ValueError("bad value")))
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY")
+        s.summarize(day)
+        captured = capsys.readouterr()
+        assert "ValueError" in captured.err
+        assert "bad value" in captured.err
+
+    def test_exception_debug_includes_traceback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """With debug=True, a full traceback is printed to stderr."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day = make_day_summary(tmp_path=tmp_path)
+        monkeypatch.setitem(
+            sys.modules, "litellm", _make_raising_litellm(RuntimeError("traceback test"))
+        )
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY", debug=True)
+        s.summarize(day)
+        captured = capsys.readouterr()
+        assert "Traceback" in captured.err
+
+    def test_invalid_json_debug_shows_snippet(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """With debug=True, parse failures print a content snippet to stderr."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day = make_day_summary(tmp_path=tmp_path)
+        bad_json = "this-is-not-json-at-all"
+        monkeypatch.setitem(sys.modules, "litellm", _make_fake_litellm(bad_json))
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY", debug=True)
+        result = s.group_commits(day)
+        assert result is None
+        captured = capsys.readouterr()
+        assert "this-is-not-json" in captured.err
 
     def test_missing_api_key_returns_none(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

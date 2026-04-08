@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import time
+import traceback
 from typing import Protocol
 
 from gitvisual.git.models import Commit, CommitGroup, DaySummary
@@ -122,10 +123,12 @@ class LLMSummarizer:
             litellm.suppress_debug_info = True
             litellm.verbose = False
         except ImportError:
+            self._dbg("litellm not installed — LLM calls disabled")
             return None
 
         api_key = os.environ.get(self.api_key_env)
         if not api_key:
+            self._dbg(f"no API key found in ${self.api_key_env} — skipping LLM call")
             return None
 
         try:
@@ -165,7 +168,9 @@ class LLMSummarizer:
                 self._dbg(f"  → (empty response) in {elapsed:.1f}s")
             return content if content else None
         except Exception as e:
-            print(f"[gitvisual] LLM call failed: {e}", file=sys.stderr)  # noqa: T201
+            print(f"[gitvisual] LLM call failed: {type(e).__name__}: {e}", file=sys.stderr)  # noqa: T201
+            if self.debug:
+                print(traceback.format_exc(), file=sys.stderr)  # noqa: T201
             return None
 
     def _parse_groups(self, content: str, day: DaySummary) -> list[CommitGroup] | None:
@@ -199,6 +204,9 @@ class LLMSummarizer:
             return groups
         except Exception as e:
             print(f"[gitvisual] Failed to parse groups JSON: {e}", file=sys.stderr)  # noqa: T201
+            if self.debug:
+                snippet = content[:200].replace("\n", " ")
+                print(f"[debug] content snippet: {snippet!r}", file=sys.stderr)  # noqa: T201
             return None
 
     def summarize(self, day: DaySummary) -> str | None:
