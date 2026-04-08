@@ -364,7 +364,8 @@ class LLMSummarizer:
             summary = self.summarize(day)
             return (summary, None)
 
-        self._dbg(f"  → {len(groups)} group(s) parsed")
+        group_lines = "  ".join(f"{g.summary!r} ({len(g.commits)})" for g in groups)
+        self._dbg(f"  → {len(groups)} group(s) parsed:  {group_lines}")
 
         # Turn 2: append assistant reply + summary question (no commits repeated)
         self._dbg("Turn 2 — summary")
