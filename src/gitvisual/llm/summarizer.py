@@ -37,8 +37,8 @@ class LLMSummarizer:
         model: str = "anthropic/claude-3-haiku",
         api_key_env: str = "OPENROUTER_API_KEY",
         api_base: str | None = None,
-        max_tokens: int = 1500,
-        max_tokens_grouping: int = 4096,
+        max_tokens: int | None = 1500,
+        max_tokens_grouping: int | None = 4096,
         timeout: int = 30,
         timeout_grouping: int = 120,
         debug: bool = False,
@@ -112,7 +112,7 @@ class LLMSummarizer:
     def _call_llm(
         self,
         messages: list[dict[str, str]],
-        max_tokens: int,
+        max_tokens: int | None,
         **extra_kwargs: object,
     ) -> str | None:
         """Call litellm and return the response text, or None on any failure."""
@@ -132,10 +132,11 @@ class LLMSummarizer:
             kwargs: dict[str, object] = {
                 "model": self.model,
                 "messages": messages,
-                "max_tokens": max_tokens,
                 "timeout": self.timeout,
                 "extra_body": {"reasoning": {"exclude": True}},
             }
+            if max_tokens is not None:
+                kwargs["max_tokens"] = max_tokens
             if self.api_base:
                 kwargs["api_base"] = self.api_base
             if api_key:
@@ -146,9 +147,10 @@ class LLMSummarizer:
             # Rough token estimate: 1 token ≈ 4 chars
             input_chars = sum(len(m.get("content", "")) for m in messages)
             input_tokens_est = input_chars // 4
+            max_tokens_str = str(max_tokens) if max_tokens is not None else "unlimited"
             self._dbg(
                 f"{len(messages)} message(s), ~{input_tokens_est} tokens input,"
-                f" max_tokens={max_tokens}, timeout={effective_timeout}s,"
+                f" max_tokens={max_tokens_str}, timeout={effective_timeout}s,"
                 f" model={self.model}"
             )
 
@@ -400,24 +402,33 @@ def make_summarizer(
     model: str,
     api_key_env: str,
     api_base: str | None = None,
-    max_tokens: int = 200,
-    max_tokens_grouping: int = 4096,
+    max_tokens: int | None = 200,
+    max_tokens_grouping: int | None = 4096,
     timeout: int = 30,
     timeout_grouping: int = 120,
     stub: bool = False,
     debug: bool = False,
 ) -> Summarizer:
-    """Factory: return the appropriate summarizer based on settings."""
+    """Factory: return the appropriate summarizer based on settings.
+
+    ``max_tokens`` / ``max_tokens_grouping`` values that are ``None`` or ``<= 0``
+    are converted to ``None``, which omits the ``max_tokens`` parameter from the
+    litellm call and lets the model use its own default limit.
+    """
     if not enabled:
         return NullSummarizer()
     if stub:
         return StubSummarizer()
+
+    def _to_limit(v: int | None) -> int | None:
+        return None if (v is None or v <= 0) else v
+
     return LLMSummarizer(
         model=model,
         api_key_env=api_key_env,
         api_base=api_base,
-        max_tokens=max_tokens,
-        max_tokens_grouping=max_tokens_grouping,
+        max_tokens=_to_limit(max_tokens),
+        max_tokens_grouping=_to_limit(max_tokens_grouping),
         timeout=timeout,
         timeout_grouping=timeout_grouping,
         debug=debug,

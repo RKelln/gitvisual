@@ -32,8 +32,8 @@ class LLMConfig(BaseModel):
     model: str = "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
     api_key_env: str = "OPENROUTER_API_KEY"
     api_base: str | None = None
-    max_tokens: int = 1500
-    max_tokens_grouping: int = 4096
+    max_tokens: int = 1500  # set to 0 (or negative) to omit max_tokens and let the model decide
+    max_tokens_grouping: int = 4096  # set to 0 (or negative) to omit max_tokens for grouping
     timeout: int = 30
     timeout_grouping: int = 120
 
@@ -142,8 +142,8 @@ summarize = false
 provider = "openrouter"
 model = "openrouter/nvidia/nemotron-3-super-120b-a12b:free"  # prefix tells litellm which provider to use
 api_key_env = "OPENROUTER_API_KEY"               # name of the env var holding your key
-max_tokens = 1500  # thinking models consume tokens on reasoning before output; needs room
-max_tokens_grouping = 4096  # grouping returns structured JSON — needs more room than narrative summary
+max_tokens = 1500  # set to 0 to omit max_tokens and let the model decide its own limit
+max_tokens_grouping = 4096  # set to 0 to omit max_tokens for the grouping turn
 timeout = 30
 timeout_grouping = 120  # grouping turn can be slow; give it more time
 

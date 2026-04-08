@@ -127,6 +127,22 @@ class TestMakeSummarizer:
         s = make_summarizer(enabled=True, model="openai/gpt-4o-mini", api_key_env="KEY")
         assert isinstance(s, LLMSummarizer)
 
+    @pytest.mark.parametrize("sentinel", [0, -1, -999])
+    def test_zero_or_negative_max_tokens_becomes_none(self, sentinel: int) -> None:
+        """max_tokens <= 0 must be stored as None (omit from litellm calls)."""
+        s = make_summarizer(enabled=True, model="x", api_key_env="KEY", max_tokens=sentinel)
+        assert isinstance(s, LLMSummarizer)
+        assert s.max_tokens is None
+
+    @pytest.mark.parametrize("sentinel", [0, -1, -999])
+    def test_zero_or_negative_max_tokens_grouping_becomes_none(self, sentinel: int) -> None:
+        """max_tokens_grouping <= 0 must be stored as None (omit from litellm calls)."""
+        s = make_summarizer(
+            enabled=True, model="x", api_key_env="KEY", max_tokens_grouping=sentinel
+        )
+        assert isinstance(s, LLMSummarizer)
+        assert s.max_tokens_grouping is None
+
     def test_stub_group_commits_returns_list(self, tmp_path: Path) -> None:
         """make_summarizer(stub=True) → group_commits() returns a list."""
         s = make_summarizer(enabled=True, model="x", api_key_env="KEY", stub=True)
@@ -731,6 +747,36 @@ class TestLLMSummarizerGroupCommits:
         # Must use max_tokens_grouping (4096), not max_tokens (100)
         assert captured.get("max_tokens") == 4096
         assert captured.get("max_tokens") != 100
+
+    def test_max_tokens_none_omits_param_from_litellm(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When max_tokens=None, the max_tokens key must not be sent to litellm at all."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fake-key")
+        day, _commits = self._make_day(tmp_path)
+        captured: dict = {}
+
+        def capturing_completion(**kwargs: object) -> object:
+            from types import SimpleNamespace
+
+            captured.update(kwargs)
+            content = json.dumps(
+                {"groups": [{"summary": "g", "commit_indices": list(range(len(day.commits)))}]}
+            )
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+            )
+
+        fake = types.ModuleType("litellm")
+        fake.suppress_debug_info = False  # type: ignore[attr-defined]
+        fake.verbose = True  # type: ignore[attr-defined]
+        fake.completion = capturing_completion  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+
+        s = LLMSummarizer(api_key_env="OPENROUTER_API_KEY", max_tokens_grouping=None)
+        s.group_commits(day)
+
+        assert "max_tokens" not in captured, "max_tokens must be absent when set to None"
 
     # --- None content response ---
 
